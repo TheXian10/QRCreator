@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=QR Creator
+Name[es]=Creador de QR
+Name[pt]=Criador de QR
+Name[fr]=Créateur de QR
+Comment=Create beautiful QR codes offline
+Comment[es]=Crea códigos QR bonitos sin internet
+Comment[pt]=Crie códigos QR bonitos sem internet
+Comment[fr]=Créez de beaux codes QR sans internet
+Exec=qr-creator
+Icon=qr-creator
+Terminal=false
+Categories=Graphics;Utility;
+Keywords=QR;qrcode;generator;
+StartupWMClass=qr-creator

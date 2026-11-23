@@ -77,6 +77,8 @@ strip = true
 [package.metadata.android]
 package = "io.github.thexian10.qrcreator"
 apk_name = "QRCreator"
+# Iconos de la app (los genera `creador-qr --exportar-iconos packaging/icons`).
+resources = "packaging/icons/android/res"
 build_targets = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android"]
 
 [package.metadata.android.sdk]
@@ -85,6 +87,7 @@ target_sdk_version = 34
 
 [package.metadata.android.application]
 label = "QR Creator"
+icon = "@mipmap/ic_launcher"
 
 [package.metadata.android.application.activity]
 config_changes = "orientation|screenSize|screenLayout|keyboardHidden"
@@ -95,3 +98,18 @@ name = "QR Creator"
 identifier = "io.github.thexian10.qrcreator"
 short_description = "Create beautiful QR codes offline"
 category = "public.app-category.graphics-design"
+
+# ── Paquete .deb para Debian/Ubuntu con `cargo deb` (ver README)
+[package.metadata.deb]
+name = "qr-creator"
+maintainer = "TheXian10 <TheXian10@users.noreply.github.com>"
+copyright = "TheXian10"
+section = "graphics"
+priority = "optional"
+extended-description = "Crea códigos QR bonitos sin internet, con todas las reglas de la norma QR y muchas opciones de diseño."
+depends = "$auto"
+assets = [
+    ["target/release/creador-qr", "usr/bin/qr-creator", "755"],
+    ["packaging/linux/qr-creator.desktop", "usr/share/applications/qr-creator.desktop", "644"],
+    ["packaging/icons/icon.png", "usr/share/pixmaps/qr-creator.png", "644"],
+]

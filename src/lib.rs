@@ -31,6 +31,16 @@ use std::path::PathBuf;
 /// comprobaciones automáticas).
 pub fn run() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+
+    // `--exportar-iconos <carpeta>`: escribe los iconos para los instaladores y termina.
+    if let Some(dir) = args.iter().position(|a| a == "--exportar-iconos").and_then(|i| args.get(i + 1)) {
+        if let Err(e) = render::export_icons(std::path::Path::new(dir)) {
+            eprintln!("No se pudieron escribir los iconos: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
     let shot = args
         .iter()
         .position(|a| a == "--screenshot")
@@ -49,6 +59,7 @@ pub fn run() -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("QR Creator")
         .with_app_id("qr-creator")
+        .with_icon(window_icon())
         .with_inner_size(size)
         .with_min_inner_size([420.0, 560.0]);
     if shot.is_some() {
@@ -80,6 +91,12 @@ pub fn run() -> eframe::Result<()> {
     }
 
     eframe::run_native("QR Creator", options, Box::new(move |cc| Ok(Box::new(app::QrApp::new(cc, shot)))))
+}
+
+/// Icono de la ventana y de la barra de tareas (dibujado por el propio programa).
+fn window_icon() -> egui::IconData {
+    let img = render::app_icon(128);
+    egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() }
 }
 
 /// Punto de entrada en Android: el sistema llama a esta función al abrir la app.

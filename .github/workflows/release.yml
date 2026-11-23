@@ -1,0 +1,224 @@
+# Publica una versión ("release") en GitHub con un programa para cada sistema.
+#
+# Se pone en marcha al subir una etiqueta que empiece por "v", por ejemplo:
+#   git tag v2.0.0
+#   git push origin v2.0.0
+#
+# Archivos que publica:
+#   Windows : instalador (.exe) y versión portátil (.zip)
+#   Linux   : paquete .deb (Debian/Ubuntu) y archivo .tar.gz
+#   macOS   : imagen de disco .dmg (Apple Silicon e Intel)
+#   Android : .apk
+#   iOS     : .ipa sin firmar (para instalar con AltStore o Sideloadly)
+#
+# Firma de Android: si el repositorio tiene los secretos ANDROID_KEYSTORE_BASE64 y
+# ANDROID_KEYSTORE_PASSWORD se usa esa clave (recomendado, para poder actualizar la app
+# sin desinstalarla). Si no, se crea una clave nueva en cada versión.
+name: Publicar versión
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Versión
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Compilar
+        run: cargo build --release --bin creador-qr
+      - name: Versión portátil (.zip)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist, portable | Out-Null
+          Copy-Item target\release\creador-qr.exe portable\QRCreator.exe
+          Compress-Archive -Path portable\* -DestinationPath "dist\QRCreator-$env:VERSION-Windows-portable.zip"
+      - name: Instalador (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$env:VERSION" packaging\windows\installer.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*
+
+  linux:
+    name: Linux
+    # Una versión de Ubuntu algo antigua para que funcione en más distribuciones.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Versión
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Paquetes necesarios
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev
+      - name: Compilar
+        run: cargo build --release --bin creador-qr
+      - name: Archivo .tar.gz
+        run: |
+          mkdir -p dist "qr-creator-$VERSION"
+          cp target/release/creador-qr "qr-creator-$VERSION/qr-creator"
+          cp packaging/linux/qr-creator.desktop packaging/icons/icon.png README.md "qr-creator-$VERSION/"
+          tar -czf "dist/QRCreator-$VERSION-Linux-x86_64.tar.gz" "qr-creator-$VERSION"
+      - name: Paquete .deb
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb --no-build --no-strip
+          cp target/debian/*.deb "dist/QRCreator-$VERSION-Linux-amd64.deb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Versión
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Compilar (Apple Silicon e Intel)
+        run: |
+          cargo build --release --bin creador-qr --target aarch64-apple-darwin
+          cargo build --release --bin creador-qr --target x86_64-apple-darwin
+      - name: Crear la app y la imagen de disco
+        run: |
+          APP="dmg/QR Creator.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" dist
+          lipo -create -output "$APP/Contents/MacOS/creador-qr" \
+            target/aarch64-apple-darwin/release/creador-qr \
+            target/x86_64-apple-darwin/release/creador-qr
+          sed "s/__VERSION__/$VERSION/g" packaging/macos/Info.plist > "$APP/Contents/Info.plist"
+          mkdir AppIcon.iconset
+          for s in 16 32 128 256 512; do
+            sips -z $s $s packaging/icons/icon.png --out "AppIcon.iconset/icon_${s}x${s}.png"
+            sips -z $((s*2)) $((s*2)) packaging/icons/icon.png --out "AppIcon.iconset/icon_${s}x${s}@2x.png"
+          done
+          iconutil -c icns AppIcon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
+          # Firma "ad hoc" (sin cuenta de Apple): necesaria para que abra en Apple Silicon.
+          codesign --force --deep -s - "$APP"
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "QR Creator" -srcfolder dmg -ov -format UDZO "dist/QRCreator-$VERSION-macOS.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Versión
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      # El Android SDK y el NDK ya vienen instalados en las máquinas de GitHub.
+      - name: Plataforma de Android
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;android-34" "build-tools;34.0.0"
+          echo "ANDROID_NDK_ROOT=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+      - name: Clave de firma
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$KS_B64" ] && [ -n "$KS_PASS" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            PASS="$KS_PASS"
+          else
+            PASS="qrcreator-$(openssl rand -hex 12)"
+            keytool -genkeypair -keystore "$RUNNER_TEMP/release.keystore" -alias qrcreator \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "$PASS" -keypass "$PASS" -dname "CN=QR Creator"
+          fi
+          echo "::add-mask::$PASS"
+          echo "CARGO_APK_RELEASE_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          echo "CARGO_APK_RELEASE_KEYSTORE_PASSWORD=$PASS" >> "$GITHUB_ENV"
+      - name: Compilar APK
+        run: |
+          cargo install cargo-apk --locked
+          # Si la versión final no se puede firmar, se publica la de depuración.
+          cargo apk build --lib --release || cargo apk build --lib
+          mkdir -p dist
+          APK=$(ls target/release/apk/*.apk target/debug/apk/*.apk 2>/dev/null | head -n1)
+          cp "$APK" "dist/QRCreator-$VERSION-Android.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: dist/*
+
+  ios:
+    name: iOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+      - name: Versión
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Compilar
+        run: cargo build --release --target aarch64-apple-ios --bin creador-qr
+      - name: Crear el .ipa (sin firmar)
+        run: |
+          APP="Payload/QR Creator.app"
+          mkdir -p "$APP" dist
+          cp target/aarch64-apple-ios/release/creador-qr "$APP/"
+          sed "s/__VERSION__/$VERSION/g" packaging/ios/Info.plist > "$APP/Info.plist"
+          cp packaging/icons/ios/*.png "$APP/"
+          printf 'APPL????' > "$APP/PkgInfo"
+          zip -qry "dist/QRCreator-$VERSION-iOS-sin-firmar.ipa" Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios
+          path: dist/*
+
+  publicar:
+    name: Publicar en GitHub
+    needs: [windows, linux, macos, android, ios]
+    # Se publica aunque falle algún sistema, con los archivos que sí se crearon.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Lista de archivos
+        run: ls -la dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: QR Creator ${{ github.ref_name }}
+          body_path: packaging/release-notes.md
+          files: dist/*
+          fail_on_unmatched_files: false

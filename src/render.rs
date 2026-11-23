@@ -349,6 +349,78 @@ fn icon_from(prims: Vec<Prim>, w: f32, font: &ab_glyph::FontArc, px: u32) -> Rgb
     rasterize(&scene, None, font, px)
 }
 
+/// El icono de la aplicación: un cuadrado redondeado con degradado violeta y un QR blanco
+/// estilizado (tres ojos redondeados y algunos puntos). Se usa para la ventana, los
+/// instaladores y las apps de móvil.
+pub fn app_icon(px: u32) -> RgbaImage {
+    icon_impl(px, false)
+}
+
+/// Como `app_icon`, pero `full` llena todo el cuadrado sin esquinas transparentes (iOS
+/// redondea él mismo las esquinas y no admite transparencia).
+fn icon_impl(px: u32, full: bool) -> RgbaImage {
+    let w = 24.0;
+    let mut white = Vec::new();
+    for (x, y) in [(4.0, 4.0), (13.0, 4.0), (4.0, 13.0)] {
+        let (f, b) = eye_prims(EyeFrame::Rounded, EyeBall::Rounded, x, y, false, false);
+        white.extend(f);
+        white.push(b);
+    }
+    // Puntos del cuadrante de abajo a la derecha.
+    for (x, y) in [(13, 13), (15, 13), (17, 14), (13, 15), (14, 17), (16, 16), (18, 18), (16, 19), (13, 19), (19, 16)] {
+        white.push(Prim::Circle { cx: x as f32 + 0.5, cy: y as f32 + 0.5, r: 0.62 });
+    }
+    let scene = Scene {
+        w,
+        h: w,
+        layers: vec![
+            Layer {
+                prims: vec![if full { rr(0.0, 0.0, w, w, 0.0) } else { rr(0.6, 0.6, w - 1.2, w - 1.2, 5.4) }],
+                fill: Fill::linear([110, 96, 255, 255], [72, 52, 212, 255], 60.0),
+                gbox: (0.0, 0.0, w, w),
+            },
+            Layer { prims: white, fill: Fill::solid([255, 255, 255, 255]), gbox: (0.0, 0.0, w, w) },
+        ],
+        logo_box: None,
+        text: None,
+        qr_origin: (0.0, 0.0),
+        qr_size: 1,
+    };
+    let font = ab_glyph::FontArc::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT).expect("fuente interna");
+    rasterize(&scene, None, &font, px)
+}
+
+/// Escribe todos los iconos que necesitan los instaladores en una carpeta:
+/// `icon.png` (1024 px), `icon.ico` (Windows, varios tamaños), los `mipmap-*` de Android
+/// y los iconos de iOS. Se usa con `creador-qr --exportar-iconos <carpeta>`.
+pub fn export_icons(dir: &std::path::Path) -> Result<(), String> {
+    use image::codecs::ico::{IcoEncoder, IcoFrame};
+    let e = |x: image::ImageError| x.to_string();
+    std::fs::create_dir_all(dir).map_err(|x| x.to_string())?;
+    app_icon(1024).save(dir.join("icon.png")).map_err(e)?;
+    // Windows: un .ico con varios tamaños.
+    let mut frames = Vec::new();
+    for s in [16u32, 24, 32, 48, 64, 128, 256] {
+        let img = app_icon(s);
+        frames.push(IcoFrame::as_png(img.as_raw(), s, s, image::ExtendedColorType::Rgba8).map_err(e)?);
+    }
+    let file = std::fs::File::create(dir.join("icon.ico")).map_err(|x| x.to_string())?;
+    IcoEncoder::new(file).encode_images(&frames).map_err(e)?;
+    // Android: res/mipmap-*/ic_launcher.png
+    for (name, s) in [("mdpi", 48u32), ("hdpi", 72), ("xhdpi", 96), ("xxhdpi", 144), ("xxxhdpi", 192)] {
+        let d = dir.join("android").join("res").join(format!("mipmap-{name}"));
+        std::fs::create_dir_all(&d).map_err(|x| x.to_string())?;
+        app_icon(s).save(d.join("ic_launcher.png")).map_err(e)?;
+    }
+    // iOS: iconos de la pantalla de inicio (iPhone y iPad).
+    let d = dir.join("ios");
+    std::fs::create_dir_all(&d).map_err(|x| x.to_string())?;
+    for (name, s) in [("AppIcon60x60@2x", 120u32), ("AppIcon60x60@3x", 180), ("AppIcon76x76@2x~ipad", 152), ("AppIcon83.5x83.5@2x~ipad", 167)] {
+        icon_impl(s, true).save(d.join(format!("{name}.png"))).map_err(e)?;
+    }
+    Ok(())
+}
+
 /// Icono de una forma de módulo: un pequeño trozo de patrón de 4×4.
 pub fn module_icon(shape: ModuleShape, font: &ab_glyph::FontArc, px: u32) -> RgbaImage {
     const P: [[u8; 4]; 4] = [[1, 1, 0, 1], [1, 0, 0, 1], [0, 1, 1, 1], [1, 1, 0, 0]];

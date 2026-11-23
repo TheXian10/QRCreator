@@ -29,10 +29,32 @@ formas de decorarlos. Escrito en Rust con [egui](https://github.com/emilk/egui).
 - **Modo claro y oscuro**, e **idiomas**: español, inglés, portugués y francés.
 - Funciona en **Windows, Linux y macOS**, y se compila para **Android e iOS**.
 
-## Descargar y usar
+## Descargar e instalar
 
-En la pestaña [Actions](../../actions) de GitHub hay programas listos para Windows, Linux,
-macOS y Android (APK) cada vez que se sube un cambio.
+Descarga la última versión en **[Releases](https://github.com/TheXian10/QRCreator/releases/latest)**:
+
+| Sistema | Archivo |
+|---|---|
+| Windows 10/11 | Instalador `.exe` o versión portátil `.zip` |
+| Linux | Paquete `.deb` (Debian/Ubuntu) o `.tar.gz` |
+| macOS 11+ | Imagen de disco `.dmg` (Apple Silicon e Intel) |
+| Android 7+ | `.apk` |
+| iOS 14+ | `.ipa` sin firmar (se instala con AltStore o Sideloadly) |
+
+Las instrucciones de instalación de cada sistema están en la página de cada versión.
+
+### Publicar una versión nueva
+
+Cambia `version` en `Cargo.toml`, sube los cambios y crea una etiqueta:
+
+```bash
+git tag v2.0.1
+git push origin v2.0.1
+```
+
+GitHub Actions compila todo y publica la versión (`.github/workflows/release.yml`).
+Para que la app de Android se pueda actualizar sin desinstalarla, guarda tu clave de firma
+en los secretos del repositorio `ANDROID_KEYSTORE_BASE64` y `ANDROID_KEYSTORE_PASSWORD`.
 
 ## Compilar desde el código
 
@@ -114,6 +136,8 @@ of ways to decorate them. Written in Rust with [egui](https://github.com/emilk/e
 
 ### Features
 
+- **Download**: installers for Windows, Linux, macOS, Android and iOS on the
+  [Releases](https://github.com/TheXian10/QRCreator/releases/latest) page.
 - **Content**: web link, text, Wi-Fi, contact (vCard), email, phone, SMS, WhatsApp,
   location and calendar event.
 - **Every QR standard rule** (ISO/IEC 18004): error correction L/M/Q/H, minimum and
