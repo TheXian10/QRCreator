@@ -1,0 +1,97 @@
+[package]
+name = "creador-qr"
+version = "2.0.0"
+edition = "2021"
+description = "Crea códigos QR bonitos sin internet / Create beautiful QR codes offline"
+repository = "https://github.com/TheXian10/QRCreator"
+readme = "README.md"
+keywords = ["qr", "qrcode", "egui", "generator"]
+categories = ["graphics", "gui"]
+
+[lib]
+name = "qr_creator"
+path = "src/lib.rs"
+# "cdylib" es lo que Android carga como app nativa.
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "creador-qr"
+path = "src/main.rs"
+
+[dependencies]
+# Ventana e interfaz. El motor de dibujo depende del sistema (ver más abajo):
+# OpenGL (glow) en escritorio y Android, Metal (wgpu) en iOS.
+eframe = { version = "0.31.1", default-features = false, features = ["default_fonts", "accesskit"] }
+# La capa de ventanas que usa eframe (con sus opciones normales).
+winit = "0.30"
+# Codificación del QR según la norma
+qrcodegen = "1.8"
+# Lector de QR para comprobar que el diseño se puede leer
+rqrr = { version = "0.9", default-features = false }
+# Leer el logo y guardar PNG
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp", "ico"] }
+# Dibujar el texto del marco
+ab_glyph = "0.2"
+epaint_default_fonts = "0.31.1"
+# Ajustes y diseños guardados
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Idioma del sistema
+sys-locale = "0.3"
+
+# Todo menos iOS: dibujo con OpenGL.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+eframe = { version = "0.31.1", default-features = false, features = ["glow"] }
+
+# Linux: ventanas en Wayland y X11.
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { version = "0.31.1", default-features = false, features = ["wayland", "x11"] }
+
+# Solo en escritorio: cuadros de diálogo para abrir/guardar y portapapeles.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+rfd = "0.17"
+arboard = "3.7"
+
+# Android: arranque como actividad nativa.
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.31.1", default-features = false, features = ["android-native-activity"] }
+winit = { version = "0.30", features = ["android-native-activity"] }
+
+
+# iOS: dibujo con Metal (wgpu).
+[target.'cfg(target_os = "ios")'.dependencies]
+eframe = { version = "0.31.1", default-features = false, features = ["wgpu"] }
+
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+
+# ── Empaquetado para Android con `cargo apk build --release` (ver README)
+[package.metadata.android]
+package = "io.github.thexian10.qrcreator"
+apk_name = "QRCreator"
+build_targets = ["aarch64-linux-android", "armv7-linux-androideabi", "x86_64-linux-android"]
+
+[package.metadata.android.sdk]
+min_sdk_version = 24
+target_sdk_version = 34
+
+[package.metadata.android.application]
+label = "QR Creator"
+
+[package.metadata.android.application.activity]
+config_changes = "orientation|screenSize|screenLayout|keyboardHidden"
+
+# ── Empaquetado para macOS / iOS con `cargo bundle` (ver README)
+[package.metadata.bundle]
+name = "QR Creator"
+identifier = "io.github.thexian10.qrcreator"
+short_description = "Create beautiful QR codes offline"
+category = "public.app-category.graphics-design"

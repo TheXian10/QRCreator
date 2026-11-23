@@ -1,0 +1,87 @@
+# Compila el programa para cada sistema cada vez que se sube un cambio y deja los
+# programas listos para descargar en la pestaña "Actions" de GitHub.
+name: Compilar
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  escritorio:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            file: target/release/creador-qr.exe
+          - name: Linux
+            os: ubuntu-latest
+            file: target/release/creador-qr
+          - name: macOS
+            os: macos-latest
+            file: target/release/creador-qr
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Paquetes de Linux
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev
+      - name: Pruebas
+        run: cargo test --release
+      - name: Compilar
+        run: cargo build --release --bin creador-qr
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QRCreator-${{ matrix.name }}
+          path: ${{ matrix.file }}
+
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+      - name: cargo-apk
+        run: cargo install cargo-apk --locked
+      - name: Compilar APK
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
+        run: cargo apk build --lib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: QRCreator-Android
+          path: target/debug/apk/*.apk
+
+  ios:
+    name: iOS (compilación)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+      - name: Compilar para iOS
+        run: cargo build --release --target aarch64-apple-ios --bin creador-qr

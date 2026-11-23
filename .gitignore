@@ -1,0 +1,6 @@
+# Compilación
+/target
+*.pdb
+
+# Capturas de prueba locales
+/shots
