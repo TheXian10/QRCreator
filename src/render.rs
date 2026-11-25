@@ -124,6 +124,8 @@ pub struct Scene {
     /// Caja donde va el logo (x, y, lado).
     pub logo_box: Option<(f32, f32, f32)>,
     pub text: Option<TextSpec>,
+    /// Recortar el logo en círculo.
+    pub logo_round: bool,
     /// Esquina del primer módulo y número de módulos por lado.
     pub qr_origin: (f32, f32),
     pub qr_size: i32,
@@ -278,12 +280,41 @@ fn module_prim(shape: ModuleShape, s: f32, fx: f32, fy: f32, nb: [bool; 4]) -> P
             let m = 0.84 * s;
             rr(cx - m * 0.5, cy - m * 0.5, m, m, 0.14 * m)
         }
+        ModuleShape::Drop => {
+            let r = 0.5 * s;
+            Prim::RRect { x: fx + inset, y: fy + inset, w: s, h: s, r: [r, r, 0.08, r] }
+        }
+        ModuleShape::Octagon => octagon(fx + inset, fy + inset, s, 0.29 * s),
+        // El nodo; las uniones con los vecinos las añade `module_prims`.
+        ModuleShape::Network => Prim::Circle { cx, cy, r: 0.36 * s },
+        ModuleShape::Organic => {
+            // Tamaño "al azar" pero siempre igual para la misma casilla.
+            let hsh = ((fx * 73.0).to_bits() ^ (fy * 151.0).to_bits().rotate_left(13)).wrapping_mul(0x9E37_79B1);
+            let t = (hsh >> 24) as f32 / 255.0;
+            Prim::Circle { cx, cy, r: s * (0.36 + 0.15 * t) }
+        }
+    }
+}
+
+/// Como `module_prim`, pero añade a `out` todas las piezas del módulo (la forma "Red"
+/// dibuja además las uniones con los vecinos de la derecha y de abajo).
+fn module_prims(shape: ModuleShape, s: f32, fx: f32, fy: f32, nb: [bool; 4], out: &mut Vec<Prim>) {
+    out.push(module_prim(shape, s, fx, fy, nb));
+    if shape == ModuleShape::Network {
+        let (cx, cy) = (fx + 0.5, fy + 0.5);
+        let t = 0.26 * s;
+        if nb[3] {
+            out.push(rr(cx, cy - t * 0.5, 1.0, t, 0.0));
+        }
+        if nb[1] {
+            out.push(rr(cx - t * 0.5, cy, t, 1.0, 0.0));
+        }
     }
 }
 
 /// Las figuras de un ojo de 7×7 módulos con su esquina en (x, y): el marco (una o varias
 /// piezas) y el centro de 3×3. `mx`/`my` reflejan las formas asimétricas.
-fn eye_prims(frame: EyeFrame, ball: EyeBall, x: f32, y: f32, mx: bool, my: bool) -> (Vec<Prim>, Prim) {
+fn eye_prims(frame: EyeFrame, ball: EyeBall, x: f32, y: f32, mx: bool, my: bool) -> (Vec<Prim>, Vec<Prim>) {
     let fr = |outer: [f32; 4], inner: [f32; 4]| {
         Prim::Ring(
             Box::new(Prim::RRect { x, y, w: 7.0, h: 7.0, r: mirror(outer, mx, my) }),
@@ -300,6 +331,7 @@ fn eye_prims(frame: EyeFrame, ball: EyeBall, x: f32, y: f32, mx: bool, my: bool)
         )],
         EyeFrame::Leaf => vec![fr([3.2, 0.0, 3.2, 0.0], [2.2, 0.0, 2.2, 0.0])],
         EyeFrame::Drop => vec![fr([3.2, 3.2, 0.0, 3.2], [2.2, 2.2, 0.0, 2.2])],
+        EyeFrame::Petal => vec![fr([3.4, 0.7, 0.7, 0.7], [2.4, 0.3, 0.3, 0.3])],
         EyeFrame::Octagon => vec![Prim::Ring(
             Box::new(octagon(x, y, 7.0, 2.1)),
             Box::new(octagon(x + 1.0, y + 1.0, 5.0, 1.5)),
@@ -319,7 +351,29 @@ fn eye_prims(frame: EyeFrame, ball: EyeBall, x: f32, y: f32, mx: bool, my: bool)
     };
     let (bx, by) = (x + 2.0, y + 2.0);
     let sq = |r: [f32; 4]| Prim::RRect { x: bx, y: by, w: 3.0, h: 3.0, r: mirror(r, mx, my) };
+    let (bcx, bcy) = (bx + 1.5, by + 1.5);
     let ball = match ball {
+        // Nueve puntos (uno por módulo del centro).
+        EyeBall::Dots => {
+            let mut v = Vec::with_capacity(9);
+            for i in 0..3 {
+                for j in 0..3 {
+                    v.push(Prim::Circle { cx: bx + i as f32 + 0.5, cy: by + j as f32 + 0.5, r: 0.47 });
+                }
+            }
+            return (frames, v);
+        }
+        EyeBall::Plus => plus(bcx, bcy, 1.62, 0.6),
+        EyeBall::Flower => {
+            // Flor de seis pétalos: el radio sube y baja con el ángulo.
+            let mut v = Vec::with_capacity(60);
+            for k in 0..60 {
+                let a = k as f32 / 60.0 * std::f32::consts::TAU;
+                let r = 1.18 + 0.48 * (6.0 * a).cos();
+                v.push((bcx + r * a.cos(), bcy + r * a.sin()));
+            }
+            Prim::Poly(v)
+        }
         EyeBall::Square => sq([0.0; 4]),
         EyeBall::Rounded => sq([0.8; 4]),
         EyeBall::Circle => Prim::Circle { cx: bx + 1.5, cy: by + 1.5, r: 1.5 },
@@ -331,7 +385,7 @@ fn eye_prims(frame: EyeFrame, ball: EyeBall, x: f32, y: f32, mx: bool, my: bool)
         EyeBall::Hexagon => hexagon(bx + 1.5, by + 1.5, 1.72),
         EyeBall::Octagon => octagon(bx, by, 3.0, 0.9),
     };
-    (frames, ball)
+    (frames, vec![ball])
 }
 
 /// Dibuja unas figuras en blanco sobre fondo transparente (para los iconos de la interfaz,
@@ -342,6 +396,7 @@ fn icon_from(prims: Vec<Prim>, w: f32, font: &ab_glyph::FontArc, px: u32) -> Rgb
         h: w,
         layers: vec![Layer { prims, fill: Fill::solid([255, 255, 255, 255]), gbox: (0.0, 0.0, w, w) }],
         logo_box: None,
+        logo_round: false,
         text: None,
         qr_origin: (0.0, 0.0),
         qr_size: 1,
@@ -364,7 +419,7 @@ fn icon_impl(px: u32, full: bool) -> RgbaImage {
     for (x, y) in [(4.0, 4.0), (13.0, 4.0), (4.0, 13.0)] {
         let (f, b) = eye_prims(EyeFrame::Rounded, EyeBall::Rounded, x, y, false, false);
         white.extend(f);
-        white.push(b);
+        white.extend(b);
     }
     // Puntos del cuadrante de abajo a la derecha.
     for (x, y) in [(13, 13), (15, 13), (17, 14), (13, 15), (14, 17), (16, 16), (18, 18), (16, 19), (13, 19), (19, 16)] {
@@ -382,6 +437,7 @@ fn icon_impl(px: u32, full: bool) -> RgbaImage {
             Layer { prims: white, fill: Fill::solid([255, 255, 255, 255]), gbox: (0.0, 0.0, w, w) },
         ],
         logo_box: None,
+        logo_round: false,
         text: None,
         qr_origin: (0.0, 0.0),
         qr_size: 1,
@@ -430,7 +486,7 @@ pub fn module_icon(shape: ModuleShape, font: &ab_glyph::FontArc, px: u32) -> Rgb
         for x in 0..4 {
             if on(x, y) {
                 let nb = [on(x, y - 1), on(x, y + 1), on(x - 1, y), on(x + 1, y)];
-                prims.push(module_prim(shape, 0.92, 0.3 + x as f32, 0.3 + y as f32, nb));
+                module_prims(shape, 0.92, 0.3 + x as f32, 0.3 + y as f32, nb, &mut prims);
             }
         }
     }
@@ -447,7 +503,7 @@ pub fn eye_frame_icon(frame: EyeFrame, font: &ab_glyph::FontArc, px: u32) -> Rgb
 /// Icono del centro de un ojo (solo el centro, más grande).
 pub fn eye_ball_icon(ball: EyeBall, font: &ab_glyph::FontArc, px: u32) -> RgbaImage {
     let (_, b) = eye_prims(EyeFrame::Square, ball, -1.4, -1.4, false, false);
-    icon_from(vec![b], 4.2, font, px)
+    icon_from(b, 4.2, font, px)
 }
 
 /// Convierte un código QR y un estilo en una escena lista para dibujar.
@@ -460,10 +516,12 @@ pub fn build_scene(qr: &QrResult, style: &Style, rules: &Rules, has_logo: bool) 
     let qb = n + 2.0 * q;
     let ts = style.frame_text_size * qb;
     let text_on = !style.frame_text.trim().is_empty();
-    let frame = if style.frame != FrameStyle::Border && !text_on { FrameStyle::None } else { style.frame };
+    // Las etiquetas y la burbuja sin texto no tienen sentido: se quitan.
+    let needs_text = matches!(style.frame, FrameStyle::LabelBottom | FrameStyle::LabelTop | FrameStyle::Bubble);
+    let frame = if needs_text && !text_on { FrameStyle::None } else { style.frame };
 
     let (w, h, ox, oy);
-    let mut frame_prim: Option<Prim> = None;
+    let mut frame_prims: Vec<Prim> = Vec::new();
     let mut text: Option<TextSpec> = None;
     match frame {
         FrameStyle::None => {
@@ -491,7 +549,7 @@ pub fn build_scene(qr: &QrResult, style: &Style, rules: &Rules, has_logo: bool) 
                 oy = margin + bh + gap;
                 h = oy + n + q;
             }
-            frame_prim = Some(rr(bx, by, bw, bh, bh * 0.32));
+            frame_prims.push(rr(bx, by, bw, bh, bh * 0.32));
             text = Some(TextSpec {
                 text: style.frame_text.trim().to_string(),
                 cx: bx + bw * 0.5,
@@ -509,7 +567,7 @@ pub fn build_scene(qr: &QrResult, style: &Style, rules: &Rules, has_logo: bool) 
             ox = bw + q;
             oy = bw + q;
             let ir = (style.bg_radius - bw * 0.5).max(0.0);
-            frame_prim = Some(Prim::Ring(
+            frame_prims.push(Prim::Ring(
                 Box::new(rr(0.0, 0.0, w, h, style.bg_radius)),
                 Box::new(rr(bw, bw, qb, qb, ir)),
             ));
@@ -520,6 +578,84 @@ pub fn build_scene(qr: &QrResult, style: &Style, rules: &Rules, has_logo: bool) 
                     cy: bw + qb + (tb + bw) * 0.5,
                     size: ts,
                     max_w: w * 0.88,
+                    color: style.frame_text_color,
+                });
+            }
+        }
+        FrameStyle::Bubble => {
+            // Como la etiqueta de abajo, pero en forma de pastilla con un pico hacia el código.
+            let gap = (q * 0.5).max(1.0) + 0.9;
+            let bh = ts * 1.9;
+            let margin = (q * 0.7).max(1.0);
+            w = qb;
+            ox = q;
+            oy = q;
+            let bx = q.max(1.0).min(qb * 0.2);
+            let bw = w - 2.0 * bx;
+            let by = q + n + gap;
+            h = by + bh + margin;
+            frame_prims.push(rr(bx, by, bw, bh, bh * 0.5));
+            let (cx, pw) = (w * 0.5, 1.5);
+            frame_prims.push(Prim::Poly(vec![(cx - pw, by + 0.3), (cx, by - 1.15), (cx + pw, by + 0.3)]));
+            text = Some(TextSpec {
+                text: style.frame_text.trim().to_string(),
+                cx: bx + bw * 0.5,
+                cy: by + bh * 0.5,
+                size: ts,
+                max_w: bw * 0.86,
+                color: style.frame_text_color,
+            });
+        }
+        FrameStyle::Visor => {
+            // Esquinas de visor por fuera de la zona silenciosa; el texto (opcional) va
+            // debajo con el color del marco.
+            let e = (q * 0.25).max(1.6);
+            let tb = if text_on { ts * 1.8 } else { 0.0 };
+            w = qb + 2.0 * e;
+            h = qb + 2.0 * e + tb;
+            ox = e + q;
+            oy = e + q;
+            let t = 0.9;
+            let len = (qb * 0.2).max(3.0);
+            let (x0, y0, x1, y1) = (e * 0.35, e * 0.35, w - e * 0.35, qb + 2.0 * e - e * 0.35);
+            for (cx, cy, sx, sy) in [(x0, y0, 1.0, 1.0), (x1, y0, -1.0, 1.0), (x0, y1, 1.0, -1.0), (x1, y1, -1.0, -1.0)] {
+                let hx = if sx > 0.0 { cx } else { cx - len };
+                let hy = if sy > 0.0 { cy } else { cy - t };
+                frame_prims.push(rr(hx, hy, len, t, t * 0.5));
+                let vx = if sx > 0.0 { cx } else { cx - t };
+                let vy = if sy > 0.0 { cy } else { cy - len };
+                frame_prims.push(rr(vx, vy, t, len, t * 0.5));
+            }
+            if text_on {
+                text = Some(TextSpec {
+                    text: style.frame_text.trim().to_string(),
+                    cx: w * 0.5,
+                    cy: qb + 2.0 * e + tb * 0.42,
+                    size: ts,
+                    max_w: w * 0.85,
+                    color: style.frame_color,
+                });
+            }
+        }
+        FrameStyle::Polaroid => {
+            // Borde fino arriba y a los lados y una franja ancha abajo, como una foto.
+            let b = (q * 0.35).max(1.4);
+            let bottom = if text_on { ts * 3.2 } else { b * 2.6 };
+            w = qb + 2.0 * b;
+            h = qb + b + bottom;
+            ox = b + q;
+            oy = b + q;
+            frame_prims.push(Prim::Ring(
+                Box::new(rr(0.0, 0.0, w, h, style.bg_radius.min(1.5))),
+                Box::new(rr(b, b, qb, qb, 0.3)),
+            ));
+            if text_on {
+                text = Some(TextSpec {
+                    text: style.frame_text.trim().to_string(),
+                    cx: w * 0.5,
+                    cy: b + qb + bottom * 0.5,
+                    size: ts * 1.05,
+                    max_w: w * 0.85,
                     color: style.frame_text_color,
                 });
             }
@@ -535,8 +671,8 @@ pub fn build_scene(qr: &QrResult, style: &Style, rules: &Rules, has_logo: bool) 
             gbox: (0.0, 0.0, w, h),
         });
     }
-    if let Some(p) = frame_prim {
-        layers.push(Layer { prims: vec![p], fill: Fill::solid(style.frame_color), gbox: (0.0, 0.0, w, h) });
+    if !frame_prims.is_empty() {
+        layers.push(Layer { prims: frame_prims, fill: Fill::solid(style.frame_color), gbox: (0.0, 0.0, w, h) });
     }
 
     // Zona despejada para el logo
@@ -575,7 +711,7 @@ pub fn build_scene(qr: &QrResult, style: &Style, rules: &Rules, has_logo: bool) 
             }
             // Vecinos (arriba, abajo, izquierda, derecha): las formas "conectadas" los necesitan.
             let nb = [on(x, y - 1), on(x, y + 1), on(x - 1, y), on(x + 1, y)];
-            mods.push(module_prim(style.module_shape, s, ox + x as f32, oy + y as f32, nb));
+            module_prims(style.module_shape, s, ox + x as f32, oy + y as f32, nb, &mut mods);
         }
     }
     let qbox = (ox, oy, n, n);
@@ -589,7 +725,7 @@ pub fn build_scene(qr: &QrResult, style: &Style, rules: &Rules, has_logo: bool) 
     for &(ex, ey, mx, my) in &eyes {
         let (f, b) = eye_prims(style.eye_frame, style.eye_ball, ox + ex, oy + ey, mx, my);
         frames.extend(f);
-        balls.push(b);
+        balls.extend(b);
     }
     let (ff, bf) = if style.eyes_custom {
         (Fill::solid(style.eye_frame_color), Fill::solid(style.eye_ball_color))
@@ -628,7 +764,7 @@ pub fn build_scene(qr: &QrResult, style: &Style, rules: &Rules, has_logo: bool) 
         }
     });
 
-    Scene { w, h, layers, logo_box, text, qr_origin: (ox, oy), qr_size: size }
+    Scene { w, h, layers, logo_box, logo_round: style.logo_round, text, qr_origin: (ox, oy), qr_size: size }
 }
 
 // ---------------------------------------------------------------- rasterizado
@@ -790,7 +926,10 @@ pub fn rasterize(
         let k = box_px / iw.max(ih);
         let tw = ((iw * k).round() as u32).max(1);
         let th = ((ih * k).round() as u32).max(1);
-        let resized = image::imageops::resize(img, tw, th, image::imageops::FilterType::Triangle);
+        let mut resized = image::imageops::resize(img, tw, th, image::imageops::FilterType::Triangle);
+        if scene.logo_round {
+            resized = round_mask(&resized);
+        }
         let x0 = (lx * scale + (box_px - tw as f32) * 0.5).round() as i64;
         let y0 = (ly * scale + (box_px - th as f32) * 0.5).round() as i64;
         for (x, y, p) in resized.enumerate_pixels() {
@@ -1021,7 +1160,8 @@ pub fn to_svg(scene: &Scene, logo: Option<&RgbaImage>, px_width: u32) -> String 
     }
     if let (Some(img), Some((lx, ly, side))) = (logo, scene.logo_box) {
         let mut png = Vec::new();
-        if image::DynamicImage::ImageRgba8(img.clone())
+        let img = if scene.logo_round { round_mask(img) } else { img.clone() };
+        if image::DynamicImage::ImageRgba8(img)
             .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .is_ok()
         {
@@ -1054,6 +1194,138 @@ pub fn to_svg(scene: &Scene, logo: Option<&RgbaImage>, px_width: u32) -> String 
     s.push_str(&body);
     s.push_str("</svg>\n");
     s
+}
+
+/// Recorta una imagen en círculo (lo de fuera queda transparente, con borde suave).
+pub fn round_mask(img: &RgbaImage) -> RgbaImage {
+    let mut out = img.clone();
+    let (w, h) = (img.width() as f32, img.height() as f32);
+    let r = w.min(h) * 0.5;
+    for (x, y, p) in out.enumerate_pixels_mut() {
+        let d = ((x as f32 + 0.5 - w * 0.5).powi(2) + (y as f32 + 0.5 - h * 0.5).powi(2)).sqrt();
+        let k = (r - d + 0.5).clamp(0.0, 1.0);
+        p[3] = (p[3] as f32 * k) as u8;
+    }
+    out
+}
+
+/// Iconos listos para poner en el centro del QR (útiles cuando no se tiene un logo).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LogoIcon {
+    Star,
+    Heart,
+    Wifi,
+    Pin,
+    Mail,
+    Phone,
+    Play,
+    Chat,
+    Music,
+}
+
+impl LogoIcon {
+    pub const ALL: [LogoIcon; 9] = [
+        LogoIcon::Wifi,
+        LogoIcon::Pin,
+        LogoIcon::Mail,
+        LogoIcon::Phone,
+        LogoIcon::Chat,
+        LogoIcon::Play,
+        LogoIcon::Music,
+        LogoIcon::Heart,
+        LogoIcon::Star,
+    ];
+    /// Nombre en español (la interfaz lo traduce).
+    pub fn label(self) -> &'static str {
+        match self {
+            LogoIcon::Star => "Estrella",
+            LogoIcon::Heart => "Corazón",
+            LogoIcon::Wifi => "Wi-Fi",
+            LogoIcon::Pin => "Ubicación",
+            LogoIcon::Mail => "Correo",
+            LogoIcon::Phone => "Teléfono",
+            LogoIcon::Play => "Vídeo",
+            LogoIcon::Chat => "Chat",
+            LogoIcon::Music => "Música",
+        }
+    }
+}
+
+/// Un trozo de anillo entre los ángulos `a0` y `a1` (en grados; 0 = derecha, -90 = arriba).
+fn arc(cx: f32, cy: f32, r0: f32, r1: f32, a0: f32, a1: f32) -> Prim {
+    let steps = 24;
+    let mut v = Vec::with_capacity(steps * 2 + 2);
+    for k in 0..=steps {
+        let a = (a0 + (a1 - a0) * k as f32 / steps as f32).to_radians();
+        v.push((cx + r1 * a.cos(), cy + r1 * a.sin()));
+    }
+    for k in (0..=steps).rev() {
+        let a = (a0 + (a1 - a0) * k as f32 / steps as f32).to_radians();
+        v.push((cx + r0 * a.cos(), cy + r0 * a.sin()));
+    }
+    Prim::Poly(v)
+}
+
+/// Las figuras blancas de un icono, en un cuadro de 24×24 unidades.
+fn icon_glyph(icon: LogoIcon) -> Vec<Prim> {
+    match icon {
+        LogoIcon::Star => vec![star(12.0, 12.6, 7.4, 3.1)],
+        LogoIcon::Heart => vec![heart(12.0, 12.6, 13.5)],
+        LogoIcon::Wifi => vec![
+            Prim::Circle { cx: 12.0, cy: 16.6, r: 1.6 },
+            arc(12.0, 16.6, 3.4, 5.2, -138.0, -42.0),
+            arc(12.0, 16.6, 6.6, 8.4, -138.0, -42.0),
+        ],
+        LogoIcon::Pin => vec![
+            Prim::Ring(
+                Box::new(Prim::Circle { cx: 12.0, cy: 10.0, r: 5.4 }),
+                Box::new(Prim::Circle { cx: 12.0, cy: 10.0, r: 2.2 }),
+            ),
+            Prim::Poly(vec![(7.4, 12.8), (16.6, 12.8), (12.0, 20.0)]),
+        ],
+        LogoIcon::Mail => vec![
+            Prim::Ring(Box::new(rr(4.8, 7.2, 14.4, 10.0, 1.3)), Box::new(rr(6.2, 8.6, 11.6, 7.2, 0.4))),
+            Prim::Poly(vec![(6.0, 8.4), (7.6, 8.4), (12.0, 11.9), (16.4, 8.4), (18.0, 8.4), (12.0, 13.6)]),
+        ],
+        LogoIcon::Phone => vec![
+            Prim::Ring(Box::new(rr(8.0, 4.4, 8.0, 15.2, 1.7)), Box::new(rr(9.3, 6.4, 5.4, 10.0, 0.4))),
+        ],
+        LogoIcon::Play => vec![Prim::Poly(vec![(9.6, 7.2), (17.6, 12.0), (9.6, 16.8)])],
+        LogoIcon::Chat => vec![
+            rr(5.2, 6.2, 13.6, 9.8, 3.2),
+            Prim::Poly(vec![(8.2, 15.0), (12.0, 15.0), (7.6, 19.4)]),
+        ],
+        LogoIcon::Music => vec![
+            Prim::Circle { cx: 9.6, cy: 16.4, r: 2.5 },
+            rr(11.2, 6.2, 1.5, 10.4, 0.2),
+            Prim::Poly(vec![(12.5, 6.2), (17.2, 8.2), (17.2, 10.8), (12.5, 9.0)]),
+        ],
+    }
+}
+
+/// Un icono listo para el centro: figura blanca sobre un círculo del color dado (512 px).
+pub fn builtin_logo(icon: LogoIcon, color: Rgba) -> RgbaImage {
+    let w = 24.0;
+    let scene = Scene {
+        w,
+        h: w,
+        layers: vec![
+            Layer { prims: vec![Prim::Circle { cx: 12.0, cy: 12.0, r: 12.0 }], fill: Fill::solid(color), gbox: (0.0, 0.0, w, w) },
+            Layer { prims: icon_glyph(icon), fill: Fill::solid([255, 255, 255, 255]), gbox: (0.0, 0.0, w, w) },
+        ],
+        logo_box: None,
+        logo_round: false,
+        text: None,
+        qr_origin: (0.0, 0.0),
+        qr_size: 1,
+    };
+    let font = ab_glyph::FontArc::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT).expect("fuente interna");
+    rasterize(&scene, None, &font, 512)
+}
+
+/// Icono blanco (sin círculo) para los botones de la interfaz.
+pub fn logo_icon_preview(icon: LogoIcon, font: &ab_glyph::FontArc, px: u32) -> RgbaImage {
+    icon_from(icon_glyph(icon), 24.0, font, px)
 }
 
 /// Un logo de ejemplo (estrella blanca sobre un círculo con degradado) para probar la función.
@@ -1222,8 +1494,49 @@ mod tests {
             println!("{:?}: {:?}", m, r);
             assert!(r.is_ok(), "{:?} no se lee", m);
         }
-        let logo = sample_logo();
+        // Cada marco y centro de ojo, y cada tipo de marco con texto.
+        for e in EyeFrame::ALL {
+            let style = Style { eye_frame: e, ..Style::default() };
+            let scene = build_scene(&q, &style, &rules, false);
+            let img = rasterize(&scene, None, &font, 720);
+            assert!(verify(&img, &scene, text).is_ok(), "{:?} no se lee", e);
+        }
+        for b in EyeBall::ALL {
+            let style = Style { eye_ball: b, ..Style::default() };
+            let scene = build_scene(&q, &style, &rules, false);
+            let img = rasterize(&scene, None, &font, 720);
+            assert!(verify(&img, &scene, text).is_ok(), "{:?} no se lee", b);
+        }
+        for f in FrameStyle::ALL {
+            let style = Style { frame: f, frame_color: [20, 20, 60, 255], ..Style::default() };
+            let scene = build_scene(&q, &style, &rules, false);
+            let img = rasterize(&scene, None, &font, 720);
+            assert!(verify(&img, &scene, text).is_ok(), "{:?} no se lee", f);
+            img.save(format!("shots/frame_{:?}.png", f)).unwrap();
+        }
+        // Los iconos listos, recortados en círculo, también dejan leer el código.
         let hrules = Rules { ecc: Ecc::H, ..Rules::default() };
+        let hq = crate::qr::encode(text, &hrules).unwrap();
+        for icon in LogoIcon::ALL {
+            let logo = builtin_logo(icon, [99, 91, 255, 255]);
+            let style = Style { logo_round: true, ..Style::default() };
+            let scene = build_scene(&hq, &style, &hrules, true);
+            let img = rasterize(&scene, Some(&logo), &font, 720);
+            assert!(verify(&img, &scene, text).is_ok(), "{:?} no se lee", icon);
+            img.save(format!("shots/icon_{:?}.png", icon)).unwrap();
+        }
+        // Diseños al azar.
+        let mut fails = 0;
+        for seed in 0..40u64 {
+            let style = random_style(seed);
+            let scene = build_scene(&q, &style, &rules, false);
+            let img = rasterize(&scene, None, &font, 480);
+            if verify(&img, &scene, text).is_err() {
+                fails += 1;
+            }
+        }
+        println!("al azar ilegibles: {fails}/40");
+        let logo = sample_logo();
         let hq = crate::qr::encode(text, &hrules).unwrap();
         for (i, p) in PRESETS.iter().enumerate() {
             let style = (p.style)();

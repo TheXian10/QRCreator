@@ -297,6 +297,34 @@ struct Icons {
     modules: Vec<egui::TextureHandle>,
     frames: Vec<egui::TextureHandle>,
     balls: Vec<egui::TextureHandle>,
+    /// Iconos listos para el centro del QR.
+    logos: Vec<egui::TextureHandle>,
+}
+
+/// Formatos en los que se puede guardar el QR.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExportFormat {
+    Png,
+    Svg,
+    Jpg,
+}
+
+impl ExportFormat {
+    const ALL: [ExportFormat; 3] = [ExportFormat::Png, ExportFormat::Svg, ExportFormat::Jpg];
+    fn name(self) -> &'static str {
+        match self {
+            ExportFormat::Png => "PNG",
+            ExportFormat::Svg => "SVG",
+            ExportFormat::Jpg => "JPG",
+        }
+    }
+    fn hint(self) -> &'static str {
+        match self {
+            ExportFormat::Png => tr("Imagen con transparencia, para web y documentos"),
+            ExportFormat::Svg => tr("Ideal para imprenta: se puede agrandar sin perder calidad"),
+            ExportFormat::Jpg => tr("Imagen ligera con fondo blanco, para compartir"),
+        }
+    }
 }
 
 pub struct QrApp {
@@ -326,6 +354,17 @@ pub struct QrApp {
     thumbs_key: Option<(String, Rules, u64, Lang)>,
     /// En el móvil: lista de archivos abierta para elegir (logo o diseño).
     file_list: Option<FileKind>,
+    /// Formato elegido para guardar.
+    export_format: ExportFormat,
+    /// Categoría que se muestra en la galería (`None` = todas).
+    gallery_cat: Option<Cat>,
+    /// Historial para deshacer y rehacer cambios de diseño y reglas.
+    undo: Vec<(Style, Rules)>,
+    redo: Vec<(Style, Rules)>,
+    /// El último estado guardado en el historial.
+    committed: (Style, Rules),
+    /// Cuántas veces se ha pulsado «Sorpréndeme» (cambia la semilla).
+    surprise_n: u64,
 }
 
 /// Letra gruesa para el texto del marco del QR (la del sistema o una incluida).
@@ -390,6 +429,11 @@ impl QrApp {
                 .enumerate()
                 .map(|(i, s)| to_texture(ctx, &format!("ico-centro-{i}"), &render::eye_ball_icon(*s, &font, 96)))
                 .collect(),
+            logos: render::LogoIcon::ALL
+                .iter()
+                .enumerate()
+                .map(|(i, s)| to_texture(ctx, &format!("ico-logo-{i}"), &render::logo_icon_preview(*s, &font, 96)))
+                .collect(),
         };
 
         // `--pestana <n>` abre directamente una sección (útil para las capturas de prueba).
@@ -403,12 +447,15 @@ impl QrApp {
                 .and_then(|n| Tab::ALL.get(n).copied())
                 .unwrap_or(Tab::Content)
         };
+        let style = preset_style(&PRESETS[1]);
+        let rules = Rules { ecc: Ecc::Q, ..Rules::default() };
         Self {
             settings,
             tab,
             content: Content::default(),
-            rules: Rules { ecc: Ecc::Q, ..Rules::default() },
-            style: preset_style(&PRESETS[1]),
+            committed: (style.clone(), rules.clone()),
+            rules,
+            style,
             logo: None,
             logo_name: String::new(),
             logo_gen: 0,
@@ -427,6 +474,91 @@ impl QrApp {
             thumbs: Vec::new(),
             thumbs_key: None,
             file_list: None,
+            export_format: ExportFormat::Png,
+            gallery_cat: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            surprise_n: 0,
+        }
+    }
+
+    // ─────────────────────────────────────────────────── deshacer / rehacer
+
+    /// Guarda el estado anterior en el historial cuando el diseño cambia (espera a que se
+    /// suelte el ratón para que arrastrar un deslizador cuente como un solo cambio).
+    fn track_history(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        if self.committed.0 != self.style || self.committed.1 != self.rules {
+            let prev = std::mem::replace(&mut self.committed, (self.style.clone(), self.rules.clone()));
+            self.undo.push(prev);
+            if self.undo.len() > 100 {
+                self.undo.remove(0);
+            }
+            self.redo.clear();
+        }
+    }
+
+    fn do_undo(&mut self) {
+        if let Some(prev) = self.undo.pop() {
+            self.redo.push((self.style.clone(), self.rules.clone()));
+            self.style = prev.0.clone();
+            self.rules = prev.1.clone();
+            self.committed = prev;
+        }
+    }
+
+    fn do_redo(&mut self) {
+        if let Some(next) = self.redo.pop() {
+            self.undo.push((self.style.clone(), self.rules.clone()));
+            self.style = next.0.clone();
+            self.rules = next.1.clone();
+            self.committed = next;
+        }
+    }
+
+    /// Atajos de teclado: Ctrl+Z deshace, Ctrl+Y o Ctrl+Mayús+Z rehace (fuera de los campos de texto).
+    fn shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        let (undo, redo) = ctx.input_mut(|i| {
+            let redo = i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::Z)
+                || i.consume_key(egui::Modifiers::COMMAND, egui::Key::Y);
+            let undo = i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z);
+            (undo, redo)
+        });
+        if redo {
+            self.do_redo();
+        } else if undo {
+            self.do_undo();
+        }
+    }
+
+    /// Un diseño al azar que se pueda leer (prueba unos cuantos hasta encontrarlo).
+    fn surprise(&mut self) {
+        let Ok(q) = &self.qr else { return };
+        let base = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(7);
+        for k in 0..8u64 {
+            self.surprise_n += 1;
+            let mut st = random_style(base ^ (self.surprise_n.wrapping_mul(0x9E37_79B9) + k));
+            st.frame_text = tr(&st.frame_text).to_string();
+            let scene = render::build_scene(q, &st, &self.rules, self.logo.is_some());
+            let img = render::rasterize(&scene, self.logo.as_ref(), &self.font, 360);
+            if render::verify(&img, &scene, &self.payload).is_ok() {
+                // Se conservan el logo y sus ajustes.
+                st.logo_size = self.style.logo_size;
+                st.logo_clear = self.style.logo_clear;
+                st.logo_padding = self.style.logo_padding;
+                st.logo_bg = self.style.logo_bg;
+                st.logo_round = self.style.logo_round;
+                self.style = st;
+                return;
+            }
         }
     }
 
@@ -524,6 +656,32 @@ impl QrApp {
         };
         let res = match self.render_export(self.export_px) {
             Some(img) => img.save_with_format(&path, image::ImageFormat::Png).map_err(|e| e.to_string()),
+            None => Err(tr("No hay un QR válido.").to_string()),
+        };
+        self.report_saved(res, &path);
+    }
+
+    /// Guarda en JPG: sin transparencia (se pone sobre blanco) y con buena calidad.
+    fn save_jpg(&mut self) {
+        let Some(path) = platform::pick_save(FileKind::Jpg, tr("Guardar QR como JPG"), "codigo-qr.jpg", tr("Imagen JPG")) else {
+            return;
+        };
+        let res = match self.render_export(self.export_px) {
+            Some(img) => {
+                let mut rgb = image::RgbImage::new(img.width(), img.height());
+                for (o, p) in rgb.pixels_mut().zip(img.pixels()) {
+                    let a = p[3] as f32 / 255.0;
+                    for c in 0..3 {
+                        o[c] = (p[c] as f32 * a + 255.0 * (1.0 - a)).round() as u8;
+                    }
+                }
+                std::fs::File::create(&path).map_err(|e| e.to_string()).and_then(|f| {
+                    let mut w = std::io::BufWriter::new(f);
+                    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut w, 92)
+                        .encode_image(&rgb)
+                        .map_err(|e| e.to_string())
+                })
+            }
             None => Err(tr("No hay un QR válido.").to_string()),
         };
         self.report_saved(res, &path);
@@ -654,7 +812,7 @@ impl QrApp {
                 }
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Tema
+                // Tema (va a la derecha del todo)
                 let (icon, tip) = if self.settings.modo_oscuro { ("☀", tr("Modo claro")) } else { ("🌙", tr("Modo oscuro")) };
                 if icon_button(ui, icon).on_hover_text(tip).clicked() {
                     let d = !self.settings.modo_oscuro;
@@ -672,6 +830,13 @@ impl QrApp {
                     });
                 self.set_lang(lang);
                 ui.add_space(4.0);
+                // Deshacer / rehacer
+                if arrow_button(ui, true, !self.redo.is_empty()).on_hover_text(format!("{} (Ctrl+Y)", tr("Rehacer"))).clicked() {
+                    self.do_redo();
+                }
+                if arrow_button(ui, false, !self.undo.is_empty()).on_hover_text(format!("{} (Ctrl+Z)", tr("Deshacer"))).clicked() {
+                    self.do_undo();
+                }
                 // Diseños guardados
                 // Diseños guardados en un menú desplegable (más limpio que dos botones).
                 ui.menu_button(if compact { "☰".to_string() } else { format!("☰  {}", tr("Mis diseños")) }, |ui| {
@@ -767,6 +932,25 @@ impl QrApp {
             return;
         }
         self.refresh_thumbs(ui.ctx());
+        if ui
+            .add(primary(&format!("✨ {}", tr("Sorpréndeme"))).min_size(Vec2::new(ui.available_width(), 38.0)))
+            .on_hover_text(tr("Crea un diseño al azar que se pueda leer"))
+            .clicked()
+        {
+            self.surprise();
+        }
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            if pill(ui, tr("Todos"), self.gallery_cat.is_none()).clicked() {
+                self.gallery_cat = None;
+            }
+            for c in Cat::ALL {
+                if pill(ui, tr(c.label()), self.gallery_cat == Some(c)).clicked() {
+                    self.gallery_cat = Some(c);
+                }
+            }
+        });
+        ui.add_space(6.0);
         let p = pal();
         let gap = 10.0;
         let avail = ui.available_width();
@@ -774,7 +958,11 @@ impl QrApp {
         let cell = (avail - gap * (cols as f32 - 1.0)) / cols as f32;
         let mut chosen = None;
         egui::Grid::new("galeria").spacing([gap, gap]).show(ui, |ui| {
-            for (i, preset) in PRESETS.iter().enumerate() {
+            let shown = PRESETS
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| self.gallery_cat.is_none_or(|c| p.cat == c));
+            for (pos, (i, preset)) in shown.enumerate() {
                 let st = preset_style(preset);
                 let sel = self.style == st;
                 let (rect, resp) = ui.allocate_exact_size(Vec2::new(cell, cell + 24.0), egui::Sense::click());
@@ -801,12 +989,18 @@ impl QrApp {
                 if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     chosen = Some(st);
                 }
-                if (i + 1) % cols == 0 {
+                if (pos + 1) % cols == 0 {
                     ui.end_row();
                 }
             }
         });
-        if let Some(st) = chosen {
+        if let Some(mut st) = chosen {
+            // Se conservan el logo y sus ajustes al cambiar de diseño.
+            st.logo_size = self.style.logo_size;
+            st.logo_clear = self.style.logo_clear;
+            st.logo_padding = self.style.logo_padding;
+            st.logo_bg = self.style.logo_bg;
+            st.logo_round = self.style.logo_round;
             self.style = st;
         }
     }
@@ -979,6 +1173,36 @@ impl QrApp {
                 hint(ui, &trf("En el móvil, copia tus imágenes a esta carpeta: {0}", &[&platform::sub_dir("Logos").display()]));
             }
         });
+        // Iconos listos: se pintan con el color del código.
+        let mut picked_icon = None;
+        card(ui, tr("Iconos listos"), |ui| {
+            hint(ui, tr("Un icono para el centro, con el color de tu código."));
+            let tile = Vec2::new(64.0, 64.0);
+            let col = self.style.fg.c1;
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
+                for (icon, tex) in render::LogoIcon::ALL.iter().zip(&self.icons.logos) {
+                    let (rect, resp) = ui.allocate_exact_size(tile, egui::Sense::click());
+                    let painter = ui.painter();
+                    let c = Color32::from_rgb(col[0], col[1], col[2]);
+                    let r = rect.shrink(6.0);
+                    painter.circle_filled(r.center(), r.width() * 0.5, if resp.hovered() { c.gamma_multiply(0.85) } else { c });
+                    painter.image(tex.id(), r.shrink(9.0), full_uv(), Color32::WHITE);
+                    if resp.hovered() {
+                        painter.circle_stroke(r.center(), r.width() * 0.5 + 3.0, Stroke::new(2.0f32, ACCENT));
+                    }
+                    let resp = resp.on_hover_text(tr(icon.label())).on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if resp.clicked() {
+                        picked_icon = Some(*icon);
+                    }
+                }
+            });
+        });
+        if let Some(icon) = picked_icon {
+            self.set_logo(render::builtin_logo(icon, self.style.fg.c1), tr(icon.label()).to_string());
+            self.style.logo_round = false;
+            self.style.logo_bg = LogoBg::Circle;
+        }
         if ask {
             self.ask_logo();
         }
@@ -994,6 +1218,7 @@ impl QrApp {
         }
         let s = &mut self.style;
         card(ui, tr("Tamaño y espacio"), |ui| {
+            ui.checkbox(&mut s.logo_round, tr("Recortar el logo en círculo"));
             slider_row(ui, tr("Tamaño"), |ui| {
                 ui.add(egui::Slider::new(&mut s.logo_size, 0.1..=0.35).custom_formatter(|v, _| format!("{:.0} %", v * 100.0)))
             });
@@ -1072,6 +1297,9 @@ impl QrApp {
             });
             if s.frame == FrameStyle::Border {
                 slider_row(ui, tr("Grosor del borde"), |ui| ui.add(egui::Slider::new(&mut s.frame_width, 0.5..=6.0)));
+            }
+            if s.frame == FrameStyle::Visor {
+                hint(ui, tr("En el visor, las esquinas y el texto usan el color del marco."));
             }
         });
     }
@@ -1258,15 +1486,25 @@ impl QrApp {
                         ui.selectable_value(&mut self.export_px, px, format!("{px} px"));
                     }
                 });
-            if ui.add_enabled(ok, primary(&format!("⬇ {}", tr("Guardar PNG")))).clicked() {
-                self.save_png();
-            }
+            ui.label(RichText::new(tr("Formato")).color(pal().hint));
+            egui::ComboBox::from_id_salt("formato")
+                .width(80.0)
+                .selected_text(self.export_format.name())
+                .show_ui(ui, |ui| {
+                    for f in ExportFormat::ALL {
+                        ui.selectable_value(&mut self.export_format, f, f.name()).on_hover_text(f.hint());
+                    }
+                });
             if ui
-                .add_enabled(ok, egui::Button::new(format!("⬇ {}", tr("Guardar SVG"))))
-                .on_hover_text(tr("Ideal para imprenta: se puede agrandar sin perder calidad"))
+                .add_enabled(ok, primary(&format!("⬇ {} {}", tr("Guardar"), self.export_format.name())))
+                .on_hover_text(self.export_format.hint())
                 .clicked()
             {
-                self.save_svg();
+                match self.export_format {
+                    ExportFormat::Png => self.save_png(),
+                    ExportFormat::Svg => self.save_svg(),
+                    ExportFormat::Jpg => self.save_jpg(),
+                }
             }
             if platform::CAN_COPY_IMAGE && ui.add_enabled(ok, egui::Button::new(format!("📋 {}", tr("Copiar")))).clicked() {
                 self.copy_image();
@@ -1379,6 +1617,7 @@ impl QrApp {
 
 impl eframe::App for QrApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.shortcuts(ctx);
         self.refresh(ctx);
         self.run_check(ctx);
         let p = pal();
@@ -1442,6 +1681,7 @@ impl eframe::App for QrApp {
                 });
         }
 
+        self.track_history(ctx);
         self.file_list_window(ctx);
         self.show_toast(ctx);
         self.handle_screenshot(ctx);
@@ -1501,6 +1741,34 @@ fn app_logo(ui: &mut egui::Ui, size: f32) {
     for (cx, cy) in [(6.0, 6.0), (7.5, 7.5), (6.0, 7.5), (7.5, 5.5)] {
         p.circle_filled(r.min + Vec2::new((cx + 0.5) * u, (cy + 0.5) * u), u * 0.55, Color32::WHITE);
     }
+}
+
+/// Botón de deshacer (flecha curva a la izquierda) o rehacer (a la derecha), dibujado a mano
+/// porque la letra de la interfaz no trae esas flechas.
+fn arrow_button(ui: &mut egui::Ui, redo: bool, enabled: bool) -> egui::Response {
+    let resp = ui.add_enabled(enabled, egui::Button::new("").min_size(Vec2::splat(34.0)).corner_radius(10));
+    let p = pal();
+    let col = if enabled { p.text } else { p.hint.gamma_multiply(0.6) };
+    let c = resp.rect.center() + Vec2::new(0.0, 1.5);
+    let r = 6.5;
+    let dir = if redo { -1.0 } else { 1.0 };
+    // Arco de unos 230° que termina en la punta de la flecha.
+    let pts: Vec<egui::Pos2> = (0..=16)
+        .map(|k| {
+            let a = (-200.0 + 230.0 * k as f32 / 16.0f32).to_radians();
+            egui::pos2(c.x + dir * r * a.cos(), c.y + r * a.sin())
+        })
+        .collect();
+    let tip = pts[0];
+    ui.painter().add(egui::Shape::line(pts, Stroke::new(1.8f32, col)));
+    // Punta de flecha en el extremo superior izquierdo (o derecho al rehacer).
+    let head = [
+        tip + Vec2::new(dir * -3.6, -0.8),
+        tip + Vec2::new(dir * 1.2, -4.2),
+        tip + Vec2::new(dir * 2.2, 1.6),
+    ];
+    ui.painter().add(egui::Shape::convex_polygon(head.to_vec(), col, Stroke::NONE));
+    resp
 }
 
 /// Botón cuadrado con solo un icono.

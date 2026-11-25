@@ -58,6 +58,7 @@ pub fn sub_dir(name: &str) -> PathBuf {
 pub enum FileKind {
     Png,
     Svg,
+    Jpg,
     Design,
     Image,
 }
@@ -68,6 +69,7 @@ impl FileKind {
         match self {
             FileKind::Png => &["png"],
             FileKind::Svg => &["svg"],
+            FileKind::Jpg => &["jpg", "jpeg"],
             FileKind::Design => &["json"],
             FileKind::Image => &["png", "jpg", "jpeg", "gif", "bmp", "webp", "ico"],
         }
@@ -75,7 +77,7 @@ impl FileKind {
     /// Subcarpeta que se usa en el móvil.
     pub fn mobile_folder(self) -> &'static str {
         match self {
-            FileKind::Png | FileKind::Svg => "QR",
+            FileKind::Png | FileKind::Svg | FileKind::Jpg => "QR",
             FileKind::Design => "Disenos",
             FileKind::Image => "Logos",
         }

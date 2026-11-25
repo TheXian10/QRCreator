@@ -128,10 +128,14 @@ pub enum ModuleShape {
     Petal,
     Cross,
     Mosaic,
+    Drop,
+    Octagon,
+    Network,
+    Organic,
 }
 
 impl ModuleShape {
-    pub const ALL: [ModuleShape; 15] = [
+    pub const ALL: [ModuleShape; 19] = [
         ModuleShape::Square,
         ModuleShape::Rounded,
         ModuleShape::Circle,
@@ -147,6 +151,10 @@ impl ModuleShape {
         ModuleShape::Petal,
         ModuleShape::Cross,
         ModuleShape::Mosaic,
+        ModuleShape::Drop,
+        ModuleShape::Octagon,
+        ModuleShape::Network,
+        ModuleShape::Organic,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -165,6 +173,10 @@ impl ModuleShape {
             ModuleShape::Petal => "Pétalos",
             ModuleShape::Cross => "Equis",
             ModuleShape::Mosaic => "Mosaico",
+            ModuleShape::Drop => "Gotas",
+            ModuleShape::Octagon => "Octágonos",
+            ModuleShape::Network => "Red",
+            ModuleShape::Organic => "Orgánico",
         }
     }
 }
@@ -180,10 +192,11 @@ pub enum EyeFrame {
     Drop,
     Octagon,
     Dotted,
+    Petal,
 }
 
 impl EyeFrame {
-    pub const ALL: [EyeFrame; 8] = [
+    pub const ALL: [EyeFrame; 9] = [
         EyeFrame::Square,
         EyeFrame::Rounded,
         EyeFrame::ExtraRounded,
@@ -192,6 +205,7 @@ impl EyeFrame {
         EyeFrame::Drop,
         EyeFrame::Octagon,
         EyeFrame::Dotted,
+        EyeFrame::Petal,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -203,6 +217,7 @@ impl EyeFrame {
             EyeFrame::Drop => "Gota",
             EyeFrame::Octagon => "Octágono",
             EyeFrame::Dotted => "Punteado",
+            EyeFrame::Petal => "Pétalo",
         }
     }
 }
@@ -220,10 +235,13 @@ pub enum EyeBall {
     Heart,
     Hexagon,
     Octagon,
+    Plus,
+    Flower,
+    Dots,
 }
 
 impl EyeBall {
-    pub const ALL: [EyeBall; 10] = [
+    pub const ALL: [EyeBall; 13] = [
         EyeBall::Square,
         EyeBall::Rounded,
         EyeBall::Circle,
@@ -234,6 +252,9 @@ impl EyeBall {
         EyeBall::Heart,
         EyeBall::Hexagon,
         EyeBall::Octagon,
+        EyeBall::Plus,
+        EyeBall::Flower,
+        EyeBall::Dots,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -247,6 +268,9 @@ impl EyeBall {
             EyeBall::Heart => "Corazón",
             EyeBall::Hexagon => "Hexágono",
             EyeBall::Octagon => "Octágono",
+            EyeBall::Plus => "Cruz",
+            EyeBall::Flower => "Flor",
+            EyeBall::Dots => "Nueve puntos",
         }
     }
 }
@@ -320,17 +344,33 @@ pub enum FrameStyle {
     LabelBottom,
     LabelTop,
     Border,
+    /// Burbuja de diálogo debajo del código, con un pico que lo señala.
+    Bubble,
+    /// Esquinas de "visor" de cámara alrededor del código.
+    Visor,
+    /// Como una foto instantánea: borde fino y una franja ancha abajo para el texto.
+    Polaroid,
 }
 
 impl FrameStyle {
-    pub const ALL: [FrameStyle; 4] =
-        [FrameStyle::None, FrameStyle::LabelBottom, FrameStyle::LabelTop, FrameStyle::Border];
+    pub const ALL: [FrameStyle; 7] = [
+        FrameStyle::None,
+        FrameStyle::LabelBottom,
+        FrameStyle::LabelTop,
+        FrameStyle::Border,
+        FrameStyle::Bubble,
+        FrameStyle::Visor,
+        FrameStyle::Polaroid,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             FrameStyle::None => "Sin marco",
             FrameStyle::LabelBottom => "Etiqueta abajo",
             FrameStyle::LabelTop => "Etiqueta arriba",
             FrameStyle::Border => "Borde con texto",
+            FrameStyle::Bubble => "Burbuja",
+            FrameStyle::Visor => "Visor",
+            FrameStyle::Polaroid => "Polaroid",
         }
     }
 }
@@ -387,6 +427,8 @@ pub struct Style {
     pub logo_padding: f32,
     pub logo_bg: LogoBg,
     pub logo_bg_color: Rgba,
+    /// Recortar el logo en forma de círculo.
+    pub logo_round: bool,
 }
 
 impl Default for Style {
@@ -413,36 +455,74 @@ impl Default for Style {
             logo_padding: 0.6,
             logo_bg: LogoBg::Rounded,
             logo_bg_color: [255, 255, 255, 255],
+            logo_round: false,
         }
     }
 }
 
-/// Un diseño de la galería: su nombre (en español) y la función que lo crea.
+/// Categoría de un diseño de la galería.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Cat {
+    Classic,
+    Colorful,
+    Elegant,
+    Fun,
+    Framed,
+}
+
+impl Cat {
+    pub const ALL: [Cat; 5] = [Cat::Classic, Cat::Colorful, Cat::Elegant, Cat::Fun, Cat::Framed];
+    pub fn label(self) -> &'static str {
+        match self {
+            Cat::Classic => "Clásicos",
+            Cat::Colorful => "Coloridos",
+            Cat::Elegant => "Elegantes",
+            Cat::Fun => "Divertidos",
+            Cat::Framed => "Con marco",
+        }
+    }
+}
+
+/// Un diseño de la galería: su nombre (en español), su categoría y la función que lo crea.
 pub struct Preset {
     pub name: &'static str,
+    pub cat: Cat,
     pub style: fn() -> Style,
 }
 
 /// Los diseños de la galería, en el orden en que se enseñan.
 pub const PRESETS: &[Preset] = &[
-    Preset { name: "Clásico", style: Style::default },
-    Preset { name: "Océano", style: preset_ocean },
-    Preset { name: "Atardecer", style: preset_sunset },
-    Preset { name: "Bosque", style: preset_forest },
-    Preset { name: "Uva", style: preset_grape },
-    Preset { name: "Elegante", style: preset_elegant },
-    Preset { name: "Noche", style: preset_night },
-    Preset { name: "Caramelo", style: preset_candy },
-    Preset { name: "Menta", style: preset_mint },
-    Preset { name: "Coral", style: preset_coral },
-    Preset { name: "Cielo", style: preset_sky },
-    Preset { name: "Dorado", style: preset_gold },
-    Preset { name: "Lava", style: preset_lava },
-    Preset { name: "Café", style: preset_coffee },
-    Preset { name: "Fiesta", style: preset_party },
-    Preset { name: "Pizarra", style: preset_slate },
-    Preset { name: "Empresa", style: preset_corporate },
-    Preset { name: "Lavanda", style: preset_lavender },
+    Preset { name: "Clásico", cat: Cat::Classic, style: Style::default },
+    Preset { name: "Océano", cat: Cat::Framed, style: preset_ocean },
+    Preset { name: "Atardecer", cat: Cat::Framed, style: preset_sunset },
+    Preset { name: "Bosque", cat: Cat::Colorful, style: preset_forest },
+    Preset { name: "Uva", cat: Cat::Framed, style: preset_grape },
+    Preset { name: "Elegante", cat: Cat::Elegant, style: preset_elegant },
+    Preset { name: "Noche", cat: Cat::Classic, style: preset_night },
+    Preset { name: "Caramelo", cat: Cat::Fun, style: preset_candy },
+    Preset { name: "Menta", cat: Cat::Colorful, style: preset_mint },
+    Preset { name: "Coral", cat: Cat::Framed, style: preset_coral },
+    Preset { name: "Cielo", cat: Cat::Fun, style: preset_sky },
+    Preset { name: "Dorado", cat: Cat::Elegant, style: preset_gold },
+    Preset { name: "Lava", cat: Cat::Colorful, style: preset_lava },
+    Preset { name: "Café", cat: Cat::Elegant, style: preset_coffee },
+    Preset { name: "Fiesta", cat: Cat::Fun, style: preset_party },
+    Preset { name: "Pizarra", cat: Cat::Classic, style: preset_slate },
+    Preset { name: "Empresa", cat: Cat::Framed, style: preset_corporate },
+    Preset { name: "Lavanda", cat: Cat::Colorful, style: preset_lavender },
+    Preset { name: "Visor", cat: Cat::Framed, style: preset_visor },
+    Preset { name: "Polaroid", cat: Cat::Framed, style: preset_polaroid },
+    Preset { name: "Bocadillo", cat: Cat::Fun, style: preset_bubble },
+    Preset { name: "Conexiones", cat: Cat::Colorful, style: preset_network },
+    Preset { name: "Orgánico", cat: Cat::Colorful, style: preset_organic },
+    Preset { name: "Lluvia", cat: Cat::Colorful, style: preset_rain },
+    Preset { name: "Panal", cat: Cat::Colorful, style: preset_honey },
+    Preset { name: "Flores", cat: Cat::Fun, style: preset_flowers },
+    Preset { name: "Minimalista", cat: Cat::Classic, style: preset_minimal },
+    Preset { name: "Arcoíris", cat: Cat::Fun, style: preset_rainbow },
+    Preset { name: "Esmeralda", cat: Cat::Elegant, style: preset_emerald },
+    Preset { name: "Tinta", cat: Cat::Classic, style: preset_ink },
+    Preset { name: "Medianoche", cat: Cat::Elegant, style: preset_midnight },
 ];
 
 fn preset_ocean() -> Style {
@@ -707,6 +787,266 @@ fn preset_lavender() -> Style {
         fg: Fill::linear([90, 60, 160, 255], [140, 90, 190, 255], 120.0),
         bg: Fill::solid([246, 242, 255, 255]),
         bg_radius: 3.5,
+        ..Style::default()
+    }
+}
+
+fn preset_visor() -> Style {
+    Style {
+        module_shape: ModuleShape::Rounded,
+        module_scale: 0.94,
+        eye_frame: EyeFrame::Rounded,
+        eye_ball: EyeBall::Rounded,
+        fg: Fill::solid([24, 26, 40, 255]),
+        bg: Fill::solid([255, 255, 255, 255]),
+        bg_radius: 3.0,
+        frame: FrameStyle::Visor,
+        frame_color: [99, 91, 255, 255],
+        ..Style::default()
+    }
+}
+
+fn preset_polaroid() -> Style {
+    Style {
+        module_shape: ModuleShape::Square,
+        eye_frame: EyeFrame::Square,
+        eye_ball: EyeBall::Square,
+        fg: Fill::solid([40, 40, 44, 255]),
+        bg: Fill::solid([252, 250, 245, 255]),
+        bg_radius: 0.6,
+        frame: FrameStyle::Polaroid,
+        frame_color: [255, 255, 255, 255],
+        frame_text_color: [60, 60, 70, 255],
+        frame_text: "BIENVENIDOS".into(),
+        ..Style::default()
+    }
+}
+
+fn preset_bubble() -> Style {
+    Style {
+        module_shape: ModuleShape::Circle,
+        module_scale: 0.88,
+        eye_frame: EyeFrame::ExtraRounded,
+        eye_ball: EyeBall::Circle,
+        fg: Fill::linear([80, 40, 190, 255], [150, 60, 220, 255], 45.0),
+        bg: Fill::solid([248, 245, 255, 255]),
+        bg_radius: 4.0,
+        frame: FrameStyle::Bubble,
+        frame_color: [99, 60, 220, 255],
+        frame_text: "¡ESCANÉAME!".into(),
+        ..Style::default()
+    }
+}
+
+fn preset_network() -> Style {
+    Style {
+        module_shape: ModuleShape::Network,
+        eye_frame: EyeFrame::Circle,
+        eye_ball: EyeBall::Circle,
+        fg: Fill::linear([0, 90, 120, 255], [0, 150, 140, 255], 45.0),
+        bg: Fill::solid([240, 252, 250, 255]),
+        bg_radius: 3.0,
+        ..Style::default()
+    }
+}
+
+fn preset_organic() -> Style {
+    Style {
+        module_shape: ModuleShape::Organic,
+        eye_frame: EyeFrame::Leaf,
+        eye_ball: EyeBall::Circle,
+        fg: Fill::radial([30, 100, 40, 255], [80, 130, 30, 255]),
+        bg: Fill::solid([246, 250, 236, 255]),
+        bg_radius: 3.5,
+        ..Style::default()
+    }
+}
+
+fn preset_rain() -> Style {
+    Style {
+        module_shape: ModuleShape::Drop,
+        module_scale: 0.95,
+        eye_frame: EyeFrame::Drop,
+        eye_ball: EyeBall::Drop,
+        fg: Fill::linear([10, 60, 150, 255], [30, 130, 200, 255], 90.0),
+        bg: Fill::solid([238, 246, 255, 255]),
+        bg_radius: 3.0,
+        ..Style::default()
+    }
+}
+
+fn preset_honey() -> Style {
+    Style {
+        module_shape: ModuleShape::Octagon,
+        eye_frame: EyeFrame::Octagon,
+        eye_ball: EyeBall::Hexagon,
+        fg: Fill::linear([120, 70, 0, 255], [170, 100, 10, 255], 60.0),
+        bg: Fill::solid([255, 248, 225, 255]),
+        bg_radius: 2.0,
+        frame: FrameStyle::LabelBottom,
+        frame_color: [120, 70, 0, 255],
+        frame_text: "MÁS INFO".into(),
+        ..Style::default()
+    }
+}
+
+fn preset_flowers() -> Style {
+    Style {
+        module_shape: ModuleShape::Petal,
+        eye_frame: EyeFrame::Petal,
+        eye_ball: EyeBall::Flower,
+        fg: Fill::linear([200, 30, 100, 255], [230, 90, 60, 255], 45.0),
+        eyes_custom: true,
+        eye_frame_color: [170, 20, 90, 255],
+        eye_ball_color: [230, 120, 20, 255],
+        bg: Fill::solid([255, 244, 248, 255]),
+        bg_radius: 4.0,
+        ..Style::default()
+    }
+}
+
+fn preset_minimal() -> Style {
+    Style {
+        module_shape: ModuleShape::Square,
+        module_scale: 0.78,
+        eye_frame: EyeFrame::Square,
+        eye_ball: EyeBall::Square,
+        fg: Fill::solid([50, 54, 62, 255]),
+        bg: Fill::solid([255, 255, 255, 255]),
+        ..Style::default()
+    }
+}
+
+fn preset_rainbow() -> Style {
+    Style {
+        module_shape: ModuleShape::Circle,
+        module_scale: 0.92,
+        eye_frame: EyeFrame::ExtraRounded,
+        eye_ball: EyeBall::Star,
+        fg: Fill::linear([200, 30, 60, 255], [40, 60, 200, 255], 0.0),
+        bg: Fill::solid([255, 255, 255, 255]),
+        bg_radius: 3.0,
+        frame: FrameStyle::Bubble,
+        frame_color: [120, 40, 160, 255],
+        frame_text: "SÍGUENOS".into(),
+        ..Style::default()
+    }
+}
+
+fn preset_emerald() -> Style {
+    Style {
+        module_shape: ModuleShape::Diamond,
+        eye_frame: EyeFrame::Octagon,
+        eye_ball: EyeBall::Diamond,
+        fg: Fill::linear([0, 90, 60, 255], [10, 120, 80, 255], 45.0),
+        eyes_custom: true,
+        eye_frame_color: [0, 80, 55, 255],
+        eye_ball_color: [170, 130, 40, 255],
+        bg: Fill::solid([248, 252, 248, 255]),
+        bg_radius: 1.5,
+        frame: FrameStyle::Border,
+        frame_color: [0, 70, 50, 255],
+        frame_text_color: [225, 195, 120, 255],
+        frame_text: "PREMIUM".into(),
+        frame_width: 1.5,
+        ..Style::default()
+    }
+}
+
+fn preset_ink() -> Style {
+    Style {
+        module_shape: ModuleShape::Rounded,
+        eye_frame: EyeFrame::Petal,
+        eye_ball: EyeBall::Dots,
+        fg: Fill::solid([20, 20, 24, 255]),
+        bg: Fill::solid([255, 255, 255, 255]),
+        bg_radius: 2.0,
+        ..Style::default()
+    }
+}
+
+fn preset_midnight() -> Style {
+    Style {
+        module_shape: ModuleShape::Liquid,
+        eye_frame: EyeFrame::Rounded,
+        eye_ball: EyeBall::Plus,
+        fg: Fill::linear([16, 24, 60, 255], [40, 50, 110, 255], 135.0),
+        eyes_custom: true,
+        eye_frame_color: [16, 24, 60, 255],
+        eye_ball_color: [120, 130, 160, 255],
+        bg: Fill::solid([246, 247, 252, 255]),
+        bg_radius: 2.0,
+        frame: FrameStyle::Polaroid,
+        frame_color: [16, 24, 60, 255],
+        frame_text_color: [230, 232, 245, 255],
+        frame_text: "VISÍTANOS".into(),
+        ..Style::default()
+    }
+}
+
+/// Paletas que combinan bien: color del código (inicio, final), fondo y color de acento
+/// (ojos y marco). Las usa el botón «Sorpréndeme».
+const PALETTES: [(Rgba, Rgba, Rgba, Rgba); 12] = [
+    ([0, 92, 151, 255], [0, 160, 190, 255], [255, 255, 255, 255], [0, 60, 120, 255]),
+    ([200, 40, 90, 255], [240, 120, 40, 255], [255, 248, 242, 255], [180, 30, 80, 255]),
+    ([20, 100, 60, 255], [70, 150, 70, 255], [244, 250, 240, 255], [10, 80, 50, 255]),
+    ([88, 28, 135, 255], [180, 60, 170, 255], [250, 245, 255, 255], [70, 20, 120, 255]),
+    ([30, 30, 34, 255], [70, 70, 80, 255], [250, 247, 240, 255], [176, 141, 87, 255]),
+    ([16, 42, 92, 255], [0, 120, 200, 255], [255, 255, 255, 255], [16, 42, 92, 255]),
+    ([150, 20, 20, 255], [210, 80, 20, 255], [255, 247, 238, 255], [130, 20, 20, 255]),
+    ([0, 100, 100, 255], [20, 140, 120, 255], [236, 250, 246, 255], [0, 80, 80, 255]),
+    ([78, 52, 36, 255], [130, 90, 60, 255], [246, 238, 226, 255], [78, 52, 36, 255]),
+    ([60, 40, 160, 255], [120, 80, 230, 255], [246, 244, 255, 255], [99, 91, 255, 255]),
+    ([190, 30, 110, 255], [120, 40, 190, 255], [255, 240, 247, 255], [150, 20, 100, 255]),
+    ([44, 52, 64, 255], [80, 90, 110, 255], [240, 242, 245, 255], [44, 52, 64, 255]),
+];
+
+/// Un diseño al azar a partir de un número cualquiera (`seed`). Solo usa formas que se
+/// leen bien; la interfaz además comprueba que el resultado se pueda escanear.
+pub fn random_style(seed: u64) -> Style {
+    let mut x = seed ^ 0x9E37_79B9_7F4A_7C15;
+    let mut next = |n: usize| -> usize {
+        // xorshift64*: suficiente para elegir opciones al azar.
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        (x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 33) as usize % n.max(1)
+    };
+    let shapes = [
+        ModuleShape::Square, ModuleShape::Rounded, ModuleShape::Circle, ModuleShape::Liquid,
+        ModuleShape::Diamond, ModuleShape::VBars, ModuleShape::HBars, ModuleShape::Hexagon,
+        ModuleShape::Petal, ModuleShape::Mosaic, ModuleShape::Drop, ModuleShape::Octagon,
+        ModuleShape::Network, ModuleShape::Organic, ModuleShape::Heart, ModuleShape::Star,
+    ];
+    let frames = [FrameStyle::None, FrameStyle::None, FrameStyle::LabelBottom, FrameStyle::Bubble, FrameStyle::Visor, FrameStyle::Polaroid, FrameStyle::Border];
+    let texts = ["ESCANÉAME", "¡ESCANÉAME!", "MÁS INFO", "SÍGUENOS", "BIENVENIDOS", "VISÍTANOS"];
+    let (c1, c2, bg, accent) = PALETTES[next(PALETTES.len())];
+    let fg = match next(3) {
+        0 => Fill::solid(c1),
+        1 => Fill::linear(c1, c2, [0.0, 45.0, 90.0, 135.0][next(4)]),
+        _ => Fill::radial(c1, c2),
+    };
+    let frame = frames[next(frames.len())];
+    let eyes_custom = next(2) == 0;
+    let (frame_color, frame_text_color) = match frame {
+        FrameStyle::Polaroid => ([255, 255, 255, 255], [60, 60, 70, 255]),
+        _ => (accent, [255, 255, 255, 255]),
+    };
+    Style {
+        module_shape: shapes[next(shapes.len())],
+        module_scale: [1.0, 0.95, 0.9][next(3)],
+        eye_frame: EyeFrame::ALL[next(EyeFrame::ALL.len())],
+        eye_ball: EyeBall::ALL[next(EyeBall::ALL.len())],
+        fg,
+        eyes_custom,
+        eye_frame_color: accent,
+        eye_ball_color: c2,
+        bg: Fill::solid(bg),
+        bg_radius: [0.0, 1.5, 3.0, 4.0][next(4)],
+        frame,
+        frame_color,
+        frame_text_color,
+        frame_text: texts[next(texts.len())].into(),
         ..Style::default()
     }
 }

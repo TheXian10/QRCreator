@@ -1,3 +1,21 @@
+## Novedades de la versión 2.1 · What's new in 2.1
+
+- **Nuevos tipos de marco**: burbuja de diálogo, visor de cámara y foto polaroid.
+- **Nuevas formas**: gotas, octágonos, red (puntos unidos) y orgánico; nuevo marco de ojo
+  «pétalo» y centros «cruz», «flor» y «nueve puntos».
+- **9 iconos listos** para el centro del QR y opción para recortar el logo en círculo.
+- **31 diseños** en la galería, ahora con categorías, y botón **«Sorpréndeme»**.
+- **Deshacer / rehacer** (Ctrl+Z / Ctrl+Y) y guardado en **JPG**.
+
+---
+
+- **New frame types**: speech bubble, camera viewfinder and instant photo.
+- **New shapes**: drops, octagons, network and organic; new "petal" eye frame and
+  "plus", "flower" and "nine dots" eye centers.
+- **9 ready-made center icons** and an option to crop the logo into a circle.
+- **31 designs** in the gallery, now with categories, plus a **"Surprise me"** button.
+- **Undo / redo** (Ctrl+Z / Ctrl+Y) and **JPG** export.
+
 ## Descargas · Downloads
 
 | Sistema / System | Archivo / File |

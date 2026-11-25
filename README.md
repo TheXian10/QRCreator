@@ -18,13 +18,18 @@ formas de decorarlos. Escrito en Rust con [egui](https://github.com/emilk/egui).
 - **Todas las reglas de la norma QR** (ISO/IEC 18004): corrección de errores L/M/Q/H,
   versión mínima y máxima (1–40), patrón de máscara automático o fijo (0–7), modo
   numérico, alfanumérico o bytes, marca UTF-8 (ECI 26) y zona silenciosa.
-- **Diseño**: 15 formas de módulos, 8 marcos y 10 centros para los ojos, colores sólidos o
-  degradados (lineal y radial), fondo transparente, esquinas redondeadas, logo en el centro
-  y marco con texto («ESCANÉAME»…).
-- **18 diseños listos** en una galería con miniaturas.
+- **Diseño**: 19 formas de módulos (incluidas «Red», «Orgánico» y «Gotas»), 9 marcos y
+  13 centros para los ojos, colores sólidos o degradados (lineal y radial), fondo
+  transparente, esquinas redondeadas, logo en el centro (recortable en círculo) y 7 tipos
+  de marco: etiqueta abajo o arriba, borde con texto, burbuja, visor y polaroid.
+- **9 iconos listos** para el centro (Wi-Fi, ubicación, correo, teléfono, chat, vídeo,
+  música, corazón y estrella), por si no tienes un logo.
+- **31 diseños listos** en una galería con miniaturas y categorías, y el botón
+  **«Sorpréndeme»**, que crea un diseño al azar que se puede leer.
+- **Deshacer y rehacer** (Ctrl+Z / Ctrl+Y).
 - **Comprueba que se pueda leer** mientras lo diseñas y avisa de contraste bajo o de un
   logo demasiado grande.
-- **Exporta** a PNG (hasta 4096 px) y SVG (vectorial, para imprenta), o copia la imagen.
+- **Exporta** a PNG (hasta 4096 px), SVG (vectorial, para imprenta) y JPG, o copia la imagen.
 - **Guarda tus diseños** en un archivo para usarlos otra vez.
 - **Modo claro y oscuro**, e **idiomas**: español, inglés, portugués y francés.
 - Funciona en **Windows, Linux y macOS**, y se compila para **Android e iOS**.
@@ -122,8 +127,8 @@ Apple, por ejemplo con [`cargo-bundle`](https://github.com/burtonageo/cargo-bund
 
 Para añadir un idioma, sigue las instrucciones del principio de `src/i18n.rs`.
 
-Pruebas: `cargo test` comprueba que todas las formas y los 18 diseños (con y sin logo) se
-puedan leer, y que la tabla de traducciones esté completa.
+Pruebas: `cargo test` comprueba que todas las formas, ojos, marcos, iconos y los 31 diseños
+(con y sin logo) se puedan leer, y que la tabla de traducciones esté completa.
 
 ---
 
@@ -143,13 +148,18 @@ of ways to decorate them. Written in Rust with [egui](https://github.com/emilk/e
 - **Every QR standard rule** (ISO/IEC 18004): error correction L/M/Q/H, minimum and
   maximum version (1–40), automatic or fixed mask pattern (0–7), numeric, alphanumeric
   or byte mode, UTF-8 marker (ECI 26) and quiet zone.
-- **Design**: 15 module shapes, 8 eye frames and 10 eye centers, solid or gradient colors
-  (linear and radial), transparent background, rounded corners, a logo in the middle and
-  a frame with a label ("SCAN ME"…).
-- **18 ready-made designs** in a gallery with previews.
+- **Design**: 19 module shapes, 9 eye frames and 13 eye centers, solid or gradient colors
+  (linear and radial), transparent background, rounded corners, a logo in the middle
+  (optionally cropped into a circle) and 7 frame types: label below/above, border with
+  text, speech bubble, viewfinder and instant photo.
+- **9 ready-made center icons** (Wi-Fi, location, mail, phone, chat, video, music, heart,
+  star) for when you don't have a logo.
+- **31 ready-made designs** in a gallery with categories, plus a **"Surprise me"** button
+  that creates a random design that still scans.
+- **Undo and redo** (Ctrl+Z / Ctrl+Y).
 - **Checks that it scans** while you design, and warns about low contrast or a logo
   that is too large.
-- **Export** to PNG (up to 4096 px) and SVG (vector, for print), or copy the image.
+- **Export** to PNG (up to 4096 px), SVG (vector, for print) and JPG, or copy the image.
 - **Save your designs** to a file and reuse them.
 - **Light and dark mode**, and **languages**: Spanish, English, Portuguese and French.
 - Runs on **Windows, Linux and macOS**, and builds for **Android and iOS**.
