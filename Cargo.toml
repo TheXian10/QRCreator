@@ -1,6 +1,6 @@
 [package]
 name = "creador-qr"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2021"
 description = "Crea códigos QR bonitos sin internet / Create beautiful QR codes offline"
 repository = "https://github.com/TheXian10/QRCreator"
@@ -70,7 +70,10 @@ opt-level = 3
 
 [profile.release]
 opt-level = 3
-lto = "thin"
+# Optimización entre todo el programa y en una sola unidad: más rápido y más pequeño.
+lto = "fat"
+codegen-units = 1
+panic = "abort"
 strip = true
 
 # ── Empaquetado para Android con `cargo apk build --release` (ver README)

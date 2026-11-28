@@ -135,21 +135,38 @@ fn apply_theme(ctx: &egui::Context, dark: bool) {
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0f32, p.card_stroke);
     v.widgets.inactive.weak_bg_fill = p.field;
     v.widgets.inactive.bg_fill = p.field;
-    v.widgets.inactive.bg_stroke = Stroke::NONE;
+    // Borde fino en botones y campos de texto: se ven definidos sin pesar.
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0f32, p.card_stroke);
     v.widgets.hovered.weak_bg_fill = p.hover;
     v.widgets.hovered.bg_fill = p.hover;
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0f32, ACCENT.gamma_multiply(0.5));
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0f32, ACCENT.gamma_multiply(0.55));
     v.widgets.active.weak_bg_fill = p.sel_fill;
+    v.widgets.active.bg_stroke = Stroke::new(1.0f32, ACCENT);
+    v.widgets.open.weak_bg_fill = p.sel_fill;
+    v.widgets.open.bg_stroke = Stroke::new(1.0f32, ACCENT);
+    // Campo de texto con el foco: borde del color de acento.
+    v.selection.stroke = Stroke::new(1.5f32, ACCENT);
+    v.text_cursor.stroke = Stroke::new(2.0f32, ACCENT);
     v.window_corner_radius = egui::CornerRadius::same(14);
     v.menu_corner_radius = egui::CornerRadius::same(10);
+    v.window_shadow = egui::Shadow { offset: [0, 10], blur: 30, spread: 0, color: p.shadow };
+    v.popup_shadow = egui::Shadow { offset: [0, 6], blur: 18, spread: 0, color: p.shadow };
     v.slider_trailing_fill = true;
+    v.handle_shape = egui::style::HandleShape::Circle;
+    v.striped = false;
     ctx.set_visuals(v);
     ctx.style_mut(|s| {
+        s.animation_time = 0.12;
+        s.interaction.tooltip_delay = 0.35;
+        // Barras de desplazamiento finas que flotan sobre el contenido.
+        s.spacing.scroll = egui::style::ScrollStyle::floating();
         s.spacing.item_spacing = Vec2::new(8.0, 8.0);
         s.spacing.button_padding = Vec2::new(12.0, 6.0);
         s.spacing.interact_size.y = 30.0;
         s.spacing.slider_width = 180.0;
+        s.spacing.slider_rail_height = 6.0;
         s.spacing.combo_width = 200.0;
+        s.spacing.menu_margin = egui::Margin::same(8);
         s.text_styles.insert(egui::TextStyle::Body, FontId::proportional(14.5));
         s.text_styles.insert(egui::TextStyle::Button, FontId::proportional(14.5));
         s.text_styles.insert(egui::TextStyle::Small, FontId::proportional(12.0));
@@ -365,6 +382,24 @@ pub struct QrApp {
     committed: (Style, Rules),
     /// Cuántas veces se ha pulsado «Sorpréndeme» (cambia la semilla).
     surprise_n: u64,
+    /// Ancho en píxeles reales con que se dibuja la vista previa (sigue al tamaño en pantalla,
+    /// para que se vea nítida en pantallas de alta densidad).
+    preview_px: u32,
+    /// Fondo sobre el que se enseña la vista previa.
+    preview_bg: PreviewBg,
+    /// Ventana «Acerca de» abierta.
+    show_about: bool,
+    /// Icono de la app (para «Acerca de»).
+    app_icon: egui::TextureHandle,
+}
+
+/// Fondo de la vista previa: para ver cómo queda el QR sobre papel claro, sobre algo
+/// oscuro o con el tablero que delata las zonas transparentes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreviewBg {
+    Light,
+    Dark,
+    Checker,
 }
 
 /// Letra gruesa para el texto del marco del QR (la del sistema o una incluida).
@@ -479,6 +514,10 @@ impl QrApp {
             undo: Vec::new(),
             redo: Vec::new(),
             surprise_n: 0,
+            preview_px: PREVIEW_PX,
+            preview_bg: PreviewBg::Light,
+            show_about: has("--acerca"),
+            app_icon: to_texture(&cc.egui_ctx, "icono-app", &render::app_icon(128)),
         }
     }
 
@@ -520,6 +559,28 @@ impl QrApp {
 
     /// Atajos de teclado: Ctrl+Z deshace, Ctrl+Y o Ctrl+Mayús+Z rehace (fuera de los campos de texto).
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1)) {
+            self.show_about = !self.show_about;
+        }
+        // Estos funcionan también escribiendo en un campo de texto.
+        let (save, save_design, open, copy) = ctx.input_mut(|i| {
+            let save_design = i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::S);
+            let save = i.consume_key(egui::Modifiers::COMMAND, egui::Key::S);
+            let open = i.consume_key(egui::Modifiers::COMMAND, egui::Key::O);
+            let copy = i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::C);
+            (save, save_design, open, copy)
+        });
+        if save_design {
+            self.save_design();
+        } else if save {
+            self.save_current();
+        }
+        if open {
+            self.ask_load_design();
+        }
+        if copy && platform::CAN_COPY_IMAGE && self.qr.is_ok() {
+            self.copy_image();
+        }
         if ctx.wants_keyboard_input() {
             return;
         }
@@ -590,7 +651,7 @@ impl QrApp {
     /// Vuelve a crear el QR y la vista previa si algo cambió.
     fn refresh(&mut self, ctx: &egui::Context) {
         let payload = self.content.payload();
-        let key = (payload.clone(), self.rules.clone(), self.style.clone(), self.logo_gen);
+        let key = (payload.clone(), self.rules.clone(), self.style.clone(), self.logo_gen + ((self.preview_px as u64) << 40));
         if self.last_key.as_ref() == Some(&key) {
             return;
         }
@@ -600,7 +661,7 @@ impl QrApp {
         match &self.qr {
             Ok(q) => {
                 let scene = render::build_scene(q, &self.style, &self.rules, self.logo.is_some());
-                let img = render::rasterize(&scene, self.logo.as_ref(), &self.font, PREVIEW_PX);
+                let img = render::rasterize(&scene, self.logo.as_ref(), &self.font, self.preview_px);
                 let ci = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
                 match &mut self.tex {
                     Some(t) => t.set(ci, egui::TextureOptions::LINEAR),
@@ -788,13 +849,30 @@ impl QrApp {
         if self.thumbs_key.as_ref() == Some(&key) && self.thumbs.len() == PRESETS.len() {
             return;
         }
-        self.thumbs.clear();
-        for (i, p) in PRESETS.iter().enumerate() {
-            let st = preset_style(p);
-            let scene = render::build_scene(q, &st, &self.rules, self.logo.is_some());
-            let img = render::rasterize(&scene, self.logo.as_ref(), &self.font, 240);
-            self.thumbs.push(to_texture(ctx, &format!("miniatura-{i}"), &img));
-        }
+        // Las miniaturas se dibujan a la vez, repartidas entre los núcleos del procesador.
+        let scenes: Vec<render::Scene> = PRESETS
+            .iter()
+            .map(|p| render::build_scene(q, &preset_style(p), &self.rules, self.logo.is_some()))
+            .collect();
+        let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).clamp(1, 8);
+        let mut images: Vec<Option<RgbaImage>> = vec![None; scenes.len()];
+        let (logo, font) = (self.logo.as_ref(), &self.font);
+        std::thread::scope(|sc| {
+            for (t, chunk) in images.chunks_mut(scenes.len().div_ceil(threads)).enumerate() {
+                let scenes = &scenes;
+                sc.spawn(move || {
+                    let first = t * scenes.len().div_ceil(threads);
+                    for (k, slot) in chunk.iter_mut().enumerate() {
+                        *slot = Some(render::rasterize(&scenes[first + k], logo, font, 240));
+                    }
+                });
+            }
+        });
+        self.thumbs = images
+            .into_iter()
+            .enumerate()
+            .map(|(i, img)| to_texture(ctx, &format!("miniatura-{i}"), &img.expect("miniatura")))
+            .collect();
         self.thumbs_key = Some(key);
     }
 
@@ -804,13 +882,14 @@ impl QrApp {
         ui.horizontal(|ui| {
             app_logo(ui, 32.0);
             ui.add_space(2.0);
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 0.0;
-                ui.label(RichText::new(tr("Creador de QR")).family(bold()).size(18.0));
-                if !compact {
+            // En pantallas estrechas solo el logotipo, para dejar sitio a los botones.
+            if !compact {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.label(RichText::new(tr("Creador de QR")).family(bold()).size(18.0));
                     ui.label(RichText::new(tr("Todo se hace en tu dispositivo, sin internet")).small().color(pal().hint));
-                }
-            });
+                });
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Tema (va a la derecha del todo)
                 let (icon, tip) = if self.settings.modo_oscuro { ("☀", tr("Modo claro")) } else { ("🌙", tr("Modo oscuro")) };
@@ -837,25 +916,30 @@ impl QrApp {
                 if arrow_button(ui, false, !self.undo.is_empty()).on_hover_text(format!("{} (Ctrl+Z)", tr("Deshacer"))).clicked() {
                     self.do_undo();
                 }
-                // Diseños guardados
-                // Diseños guardados en un menú desplegable (más limpio que dos botones).
-                ui.menu_button(if compact { "☰".to_string() } else { format!("☰  {}", tr("Mis diseños")) }, |ui| {
-                    ui.set_min_width(200.0);
-                    if ui.button(format!("💾  {}", tr("Guardar diseño"))).clicked() {
+                // Menú: diseños guardados, empezar de nuevo y «Acerca de».
+                ui.menu_button(if compact { "☰".to_string() } else { format!("☰  {}", tr("Menú")) }, |ui| {
+                    ui.set_min_width(250.0);
+                    let item = |ui: &mut egui::Ui, text: String, keys: &str| ui.add(egui::Button::new(text).shortcut_text(keys).min_size(Vec2::new(240.0, 30.0)));
+                    if item(ui, format!("💾  {}", tr("Guardar diseño")), "Ctrl+Mayús+S").clicked() {
                         ui.close_menu();
                         self.save_design();
                     }
-                    if ui.button(format!("📂  {}", tr("Cargar diseño"))).clicked() {
+                    if item(ui, format!("📂  {}", tr("Cargar diseño")), "Ctrl+O").clicked() {
                         ui.close_menu();
                         self.ask_load_design();
                     }
                     ui.separator();
-                    if ui.button(format!("↺  {}", tr("Empezar de nuevo"))).clicked() {
+                    if item(ui, format!("↺  {}", tr("Empezar de nuevo")), "").clicked() {
                         ui.close_menu();
                         self.style = preset_style(&PRESETS[0]);
                         self.rules = Rules::default();
                         self.logo = None;
                         self.logo_gen += 1;
+                    }
+                    ui.separator();
+                    if item(ui, format!("ℹ  {}", tr("Acerca de")), "F1").clicked() {
+                        ui.close_menu();
+                        self.show_about = true;
                     }
                 });
             });
@@ -871,11 +955,23 @@ impl QrApp {
             for t in Tab::ALL {
                 let sel = self.tab == t;
                 let (rect, resp) = ui.allocate_exact_size(Vec2::new(76.0, 62.0), egui::Sense::click());
+                // El resaltado aparece y desaparece suavemente.
+                let ctx = ui.ctx().clone();
+                let on = ctx.animate_bool_with_time(egui::Id::new(("menu", t as usize)), sel, 0.15);
+                let hov = ctx.animate_bool_with_time(egui::Id::new(("menu-h", t as usize)), resp.hovered() && !sel, 0.1);
                 let painter = ui.painter();
-                if sel {
-                    painter.rect_filled(rect.shrink2(Vec2::new(6.0, 2.0)), 12.0, p.sel_fill);
-                } else if resp.hovered() {
-                    painter.rect_filled(rect.shrink2(Vec2::new(6.0, 2.0)), 12.0, p.hover);
+                let pill_rect = rect.shrink2(Vec2::new(6.0, 2.0));
+                if hov > 0.0 {
+                    painter.rect_filled(pill_rect, 12.0, p.hover.gamma_multiply(hov));
+                }
+                if on > 0.0 {
+                    painter.rect_filled(pill_rect, 12.0, p.sel_fill.gamma_multiply(on));
+                    // Barra de acento a la izquierda.
+                    let bar = egui::Rect::from_center_size(
+                        egui::pos2(rect.left() + 1.5, rect.center().y),
+                        Vec2::new(3.0, 30.0 * on),
+                    );
+                    painter.rect_filled(bar, 2.0, ACCENT);
                 }
                 let col = if sel { ACCENT } else { p.icon };
                 painter.text(rect.center() - Vec2::new(0.0, 9.0), egui::Align2::CENTER_CENTER, t.icon(), FontId::proportional(20.0), col);
@@ -909,9 +1005,17 @@ impl QrApp {
     /// El contenido de la pestaña elegida.
     fn options(&mut self, ui: &mut egui::Ui) {
         ui.add_space(4.0);
-        ui.label(RichText::new(self.tab.label()).heading());
-        ui.label(RichText::new(self.tab.subtitle()).color(pal().hint));
-        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            let (r, _) = ui.allocate_exact_size(Vec2::splat(40.0), egui::Sense::hover());
+            ui.painter().rect_filled(r, 11.0, ACCENT.gamma_multiply(0.14));
+            ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, self.tab.icon(), FontId::proportional(19.0), ACCENT);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 1.0;
+                ui.label(RichText::new(self.tab.label()).heading());
+                ui.label(RichText::new(self.tab.subtitle()).color(pal().hint));
+            });
+        });
+        ui.add_space(10.0);
         match self.tab {
             Tab::Gallery => self.tab_gallery(ui),
             Tab::Content => self.tab_content(ui),
@@ -1360,58 +1464,102 @@ impl QrApp {
 
     // ─────────────────────────────────────────────────── vista previa, información y guardar
 
+    /// Barra encima de la vista previa: título, tamaño de exportación y fondo de la vista.
+    fn preview_toolbar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(tr("Vista previa")).family(bold()).size(15.0));
+            let narrow = ui.available_width() < 520.0;
+            if let (Some(img), false) = (&self.preview, narrow) {
+                let h = (self.export_px as f32 * img.height() as f32 / img.width() as f32).round();
+                ui.label(RichText::new(trf("Se exportará a {0} × {1} px", &[&self.export_px, &h])).small().color(pal().hint));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for (bg, name) in [(PreviewBg::Checker, tr("Cuadros")), (PreviewBg::Dark, tr("Oscuro")), (PreviewBg::Light, tr("Claro"))] {
+                    if small_pill(ui, name, self.preview_bg == bg).on_hover_text(tr("Fondo de la vista previa")).clicked() {
+                        self.preview_bg = bg;
+                    }
+                }
+            });
+        });
+    }
+
     /// Dibuja la vista previa del QR dentro de un rectángulo de `size` puntos.
-    fn preview(&self, ui: &mut egui::Ui, size: Vec2) {
+    fn preview(&mut self, ui: &mut egui::Ui, size: Vec2) {
         let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let pl = pal();
+        // Fondo de "mesa de trabajo" con una rejilla de puntos muy suave.
+        {
+            let p = ui.painter_at(rect);
+            let dot = if DARK.load(Ordering::Relaxed) { Color32::from_white_alpha(14) } else { Color32::from_black_alpha(16) };
+            let step = 22.0;
+            let mut y = rect.top() + step * 0.5;
+            while y < rect.bottom() {
+                let mut x = rect.left() + step * 0.5;
+                while x < rect.right() {
+                    p.circle_filled(egui::pos2(x, y), 1.0, dot);
+                    x += step;
+                }
+                y += step;
+            }
+        }
         match (&self.qr, &self.tex) {
             (Ok(_), Some(tex)) => {
                 let ts = tex.size_vec2();
-                let k = ((size.x - 48.0) / ts.x).min((size.y - 48.0) / ts.y).min(1.3).max(0.05);
-                let img_rect = egui::Rect::from_center_size(rect.center(), ts * k);
-                let p = ui.painter();
-                let pl = pal();
-                // Sombra suave, "papel" blanco y tablero (visible con fondo transparente).
-                for i in 1..=4 {
-                    let f = i as f32;
-                    p.rect_filled(img_rect.expand(10.0 + f * 2.0).translate(Vec2::new(0.0, 4.0 + f)), 18.0 + f, pl.shadow.gamma_multiply(0.35));
+                let aspect = ts.y / ts.x;
+                let dw = (size.x - 56.0).min((size.y - 56.0) / aspect).min(900.0).max(60.0);
+                let img_rect = egui::Rect::from_center_size(rect.center(), Vec2::new(dw, dw * aspect));
+                // Se pide una vista previa con tantos píxeles como se ven (en pasos, para
+                // no redibujar con cada pequeño cambio de tamaño de la ventana).
+                let want = ((dw * ui.ctx().pixels_per_point() / 160.0).ceil() * 160.0).clamp(480.0, 1760.0) as u32;
+                if want != self.preview_px {
+                    self.preview_px = want;
+                    ui.ctx().request_repaint();
                 }
-                p.rect_filled(img_rect.expand(12.0), 16.0, Color32::WHITE);
-                // El tablero solo se ve cuando el fondo es transparente.
-                let transparent = self.style.bg.mode == FillMode::Transparent;
-                let cell = 10.0;
-                let mut y = img_rect.top();
-                let mut row = 0;
-                while transparent && y < img_rect.bottom() {
-                    let mut x = img_rect.left();
-                    let mut col = row;
-                    while x < img_rect.right() {
-                        if col % 2 == 0 {
-                            let r = egui::Rect::from_min_max(
-                                egui::pos2(x, y),
-                                egui::pos2((x + cell).min(img_rect.right()), (y + cell).min(img_rect.bottom())),
-                            );
-                            p.rect_filled(r, 0.0, pl.checker);
+                let p = ui.painter();
+                // Sombra suave en capas.
+                for i in 1..=5 {
+                    let f = i as f32;
+                    p.rect_filled(img_rect.expand(12.0 + f * 2.0).translate(Vec2::new(0.0, 5.0 + f)), 18.0 + f, pl.shadow.gamma_multiply(0.28));
+                }
+                let paper = match self.preview_bg {
+                    PreviewBg::Dark => Color32::from_rgb(26, 27, 34),
+                    _ => Color32::WHITE,
+                };
+                p.rect_filled(img_rect.expand(14.0), 16.0, paper);
+                // Tablero: siempre en el modo «Cuadros», y en los demás si el fondo es transparente.
+                let checker = self.preview_bg == PreviewBg::Checker || self.style.bg.mode == FillMode::Transparent;
+                if checker {
+                    let cell = 10.0;
+                    let dark_cell = if self.preview_bg == PreviewBg::Dark { Color32::from_rgb(40, 41, 50) } else { pl.checker };
+                    let mut y = img_rect.top();
+                    let mut row = 0;
+                    while y < img_rect.bottom() {
+                        let mut x = img_rect.left();
+                        let mut col = row;
+                        while x < img_rect.right() {
+                            if col % 2 == 0 {
+                                let r = egui::Rect::from_min_max(
+                                    egui::pos2(x, y),
+                                    egui::pos2((x + cell).min(img_rect.right()), (y + cell).min(img_rect.bottom())),
+                                );
+                                p.rect_filled(r, 0.0, dark_cell);
+                            }
+                            x += cell;
+                            col += 1;
                         }
-                        x += cell;
-                        col += 1;
+                        y += cell;
+                        row += 1;
                     }
-                    y += cell;
-                    row += 1;
                 }
                 p.image(tex.id(), img_rect, full_uv(), Color32::WHITE);
             }
             (Err(e), _) => {
                 let p = ui.painter();
-                let pl = pal();
                 let r = egui::Rect::from_center_size(rect.center(), Vec2::new((size.x - 48.0).min(420.0), 120.0));
                 p.rect_filled(r, 16.0, pl.card);
                 p.rect_stroke(r, 16.0, Stroke::new(1.0f32, pl.card_stroke), egui::StrokeKind::Inside);
-                let galley = ui.painter().layout(
-                    format!("⚠  {}", e.message()),
-                    FontId::proportional(15.0),
-                    pl.bad,
-                    r.width() - 32.0,
-                );
+                let galley = ui.painter().layout(format!("⚠  {}", e.message()), FontId::proportional(15.0), pl.bad, r.width() - 32.0);
                 let pos = r.center() - galley.size() * 0.5;
                 ui.painter().galley(pos, galley, pl.bad);
             }
@@ -1419,29 +1567,28 @@ impl QrApp {
         }
     }
 
-    /// Fichas con la versión, la corrección, la máscara, el modo, la capacidad y la lectura.
+    /// Datos del código (versión, corrección, máscara, capacidad) y si se puede leer.
     fn info_bar(&self, ui: &mut egui::Ui) {
         let Ok(q) = &self.qr else { return };
         ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = Vec2::new(8.0, 8.0);
-            chip(ui, &trf("Versión {0}", &[&q.version]), &trf("{0}×{0} módulos", &[&q.size]));
-            chip(ui, &trf("Corrección {0}", &[&q.ecc.short()]), &trf("aguanta ≈{0} % de daño", &[&format!("{:.0}", q.ecc.recovery() * 100.0)]));
-            chip(
+            ui.spacing_mut().item_spacing = Vec2::new(14.0, 8.0);
+            stat(ui, &trf("Versión {0}", &[&q.version]), &trf("{0}×{0} módulos", &[&q.size]));
+            vsep(ui);
+            stat(ui, &trf("Corrección {0}", &[&q.ecc.short()]), &trf("aguanta ≈{0} % de daño", &[&format!("{:.0}", q.ecc.recovery() * 100.0)]));
+            vsep(ui);
+            stat(
                 ui,
                 &trf("Máscara {0}", &[&q.mask]),
                 if self.rules.mask.is_none() { tr("elegida sola") } else { tr("fijada a mano") },
             );
+            vsep(ui);
             let fill = q.used_bits as f32 / q.capacity_bits as f32;
             let cap = trf("Capacidad usada {0} %", &[&format!("{:.0}", fill * 100.0)]);
-            let w = text_width(ui, &cap, 12.0).max(130.0) + 26.0;
-            fixed_box(ui, Vec2::new(w, 46.0), |ui| {
-                egui::Frame::new().fill(pal().field).corner_radius(10).inner_margin(egui::Margin::symmetric(12, 7)).show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 4.0;
-                        ui.add(egui::Label::new(RichText::new(cap).small().color(pal().hint)).extend());
-                        ui.add(egui::ProgressBar::new(fill.min(1.0)).desired_width(w - 26.0).desired_height(8.0).fill(ACCENT));
-                    });
-                });
+            let w = text_width(ui, &cap, 12.0).max(120.0) + 4.0;
+            fixed_box(ui, Vec2::new(w, 40.0), |ui| {
+                ui.add_space(4.0);
+                ui.add(egui::Label::new(RichText::new(cap).small().color(pal().hint)).extend());
+                ui.add(egui::ProgressBar::new(fill.min(1.0)).desired_width(w - 4.0).desired_height(7.0).fill(ACCENT).corner_radius(4));
             });
             let (txt, col, tip): (String, Color32, String) = match &self.check {
                 Check::Ok(k) => (
@@ -1454,16 +1601,17 @@ impl QrApp {
                     .to_string(),
                 ),
                 Check::Fail(e) => (format!("✖ {}", tr("Lectura dudosa")), pal().bad, e.message().to_string()),
-                Check::Pending(_) => (tr("Comprobando lectura…").to_string(), pal().hint, String::new()),
+                Check::Pending(_) => (format!("…  {}", tr("Comprobando lectura…")), pal().hint, String::new()),
                 Check::None => (String::new(), pal().hint, String::new()),
             };
             if !txt.is_empty() {
                 let w = text_width(ui, &txt, 14.5) + 32.0;
-                fixed_box(ui, Vec2::new(w, 46.0), |ui| {
+                fixed_box(ui, Vec2::new(w, 40.0), |ui| {
                     let r = egui::Frame::new()
-                        .fill(col.gamma_multiply(0.14))
+                        .fill(col.gamma_multiply(0.13))
+                        .stroke(Stroke::new(1.0f32, col.gamma_multiply(0.35)))
                         .corner_radius(20)
-                        .inner_margin(egui::Margin::symmetric(14, 12))
+                        .inner_margin(egui::Margin::symmetric(14, 9))
                         .show(ui, |ui| ui.add(egui::Label::new(RichText::new(txt).color(col).strong()).extend()));
                     if !tip.is_empty() {
                         r.response.on_hover_text(tip);
@@ -1474,12 +1622,20 @@ impl QrApp {
     }
 
     /// Tamaño de exportación y botones para guardar o copiar.
-    fn export_bar(&mut self, ui: &mut egui::Ui) {
+    fn export_bar(&mut self, ui: &mut egui::Ui, compact: bool) {
         let ok = self.qr.is_ok();
-        ui.horizontal_wrapped(|ui| {
+        let mut action = None;
+        let row = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
+            if compact {
+                ui.horizontal_wrapped(|ui| add(ui));
+            } else {
+                ui.horizontal(|ui| add(ui));
+            }
+        };
+        row(ui, &mut |ui: &mut egui::Ui| {
             ui.label(RichText::new(tr("Tamaño")).color(pal().hint));
             egui::ComboBox::from_id_salt("tam")
-                .width(110.0)
+                .width(104.0)
                 .selected_text(format!("{} px", self.export_px))
                 .show_ui(ui, |ui| {
                     for px in [256u32, 512, 768, 1024, 2048, 3000, 4096] {
@@ -1488,30 +1644,103 @@ impl QrApp {
                 });
             ui.label(RichText::new(tr("Formato")).color(pal().hint));
             egui::ComboBox::from_id_salt("formato")
-                .width(80.0)
+                .width(76.0)
                 .selected_text(self.export_format.name())
                 .show_ui(ui, |ui| {
                     for f in ExportFormat::ALL {
                         ui.selectable_value(&mut self.export_format, f, f.name()).on_hover_text(f.hint());
                     }
                 });
-            if ui
-                .add_enabled(ok, primary(&format!("⬇ {} {}", tr("Guardar"), self.export_format.name())))
-                .on_hover_text(self.export_format.hint())
-                .clicked()
-            {
-                match self.export_format {
-                    ExportFormat::Png => self.save_png(),
-                    ExportFormat::Svg => self.save_svg(),
-                    ExportFormat::Jpg => self.save_jpg(),
+            let mut buttons = |ui: &mut egui::Ui| {
+                if ui
+                    .add_enabled(ok, primary(&format!("⬇  {} {}", tr("Guardar"), self.export_format.name())).min_size(Vec2::new(150.0, 34.0)))
+                    .on_hover_text(format!("{} (Ctrl+S)", self.export_format.hint()))
+                    .clicked()
+                {
+                    action = Some(true);
                 }
-            }
-            if platform::CAN_COPY_IMAGE && ui.add_enabled(ok, egui::Button::new(format!("📋 {}", tr("Copiar")))).clicked() {
-                self.copy_image();
+                if platform::CAN_COPY_IMAGE
+                    && ui
+                        .add_enabled(ok, egui::Button::new(format!("📋 {}", tr("Copiar"))).min_size(Vec2::new(0.0, 34.0)))
+                        .on_hover_text("Ctrl+Mayús+C")
+                        .clicked()
+                {
+                    action = Some(false);
+                }
+            };
+            if compact {
+                buttons(ui);
+            } else {
+                // A la derecha: el botón principal queda en el borde.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| buttons(ui));
             }
         });
+        match action {
+            Some(true) => self.save_current(),
+            Some(false) => self.copy_image(),
+            None => {}
+        }
         if platform::IS_MOBILE {
             hint(ui, &trf("Se guarda en: {0}", &[&platform::sub_dir("QR").display()]));
+        }
+    }
+
+    /// Guarda en el formato elegido.
+    fn save_current(&mut self) {
+        if self.qr.is_err() {
+            return;
+        }
+        match self.export_format {
+            ExportFormat::Png => self.save_png(),
+            ExportFormat::Svg => self.save_svg(),
+            ExportFormat::Jpg => self.save_jpg(),
+        }
+    }
+
+    /// Ventana «Acerca de»: versión, qué hace, atajos de teclado y enlace al código.
+    fn about_window(&mut self, ctx: &egui::Context) {
+        if !self.show_about {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new(tr("Acerca de"))
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
+            .show(ctx, |ui| {
+                ui.set_width(360.0);
+                ui.horizontal(|ui| {
+                    ui.image((self.app_icon.id(), Vec2::splat(56.0)));
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(tr("Creador de QR")).family(bold()).size(20.0));
+                        ui.label(RichText::new(trf("Versión {0}", &[&env!("CARGO_PKG_VERSION")])).color(pal().hint));
+                    });
+                });
+                ui.add_space(6.0);
+                ui.label(tr("Crea códigos QR bonitos sin internet, con todas las reglas de la norma."));
+                ui.add_space(8.0);
+                ui.label(RichText::new(tr("Atajos de teclado")).family(bold()));
+                egui::Grid::new("atajos").num_columns(2).spacing([24.0, 6.0]).show(ui, |ui| {
+                    for (k, what) in [
+                        ("Ctrl+S", tr("Guardar la imagen")),
+                        ("Ctrl+Mayús+C", tr("Copiar la imagen")),
+                        ("Ctrl+Z", tr("Deshacer")),
+                        ("Ctrl+Y", tr("Rehacer")),
+                        ("Ctrl+O", tr("Cargar diseño")),
+                        ("Ctrl+Mayús+S", tr("Guardar diseño")),
+                        ("F1", tr("Acerca de")),
+                    ] {
+                        ui.label(RichText::new(k).monospace().color(ACCENT));
+                        ui.label(what);
+                        ui.end_row();
+                    }
+                });
+                ui.add_space(8.0);
+                ui.hyperlink_to(format!("🔗 {}", tr("Código abierto en GitHub")), "https://github.com/TheXian10/QRCreator");
+            });
+        if !open {
+            self.show_about = false;
         }
     }
 
@@ -1523,12 +1752,16 @@ impl QrApp {
             self.toast = None;
             return;
         }
-        ctx.request_repaint_after(Duration::from_millis(200));
+        ctx.request_repaint_after(Duration::from_millis(16));
         let col = if t.ok { pal().good } else { pal().bad };
+        let secs = age.as_secs_f32();
+        let alpha = (secs / 0.18).min(1.0) * ((6.0 - secs) / 0.4).clamp(0.0, 1.0);
+        let lift = (1.0 - (secs / 0.18).min(1.0)) * 12.0;
         egui::Area::new(egui::Id::new("aviso"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-20.0, -20.0))
+            .anchor(egui::Align2::RIGHT_BOTTOM, Vec2::new(-20.0, -20.0 + lift))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
+                ui.multiply_opacity(alpha);
                 egui::Frame::new()
                     .fill(pal().card)
                     .stroke(Stroke::new(1.0f32, col.gamma_multiply(0.6)))
@@ -1636,11 +1869,12 @@ impl eframe::App for QrApp {
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                         let w = ui.available_width();
                         let h = (w * 1.05).min(520.0);
+                        self.preview_toolbar(ui);
                         self.preview(ui, Vec2::new(w, h));
                         card_frame().show(ui, |ui| {
                             ui.set_width(ui.available_width());
                             self.info_bar(ui);
-                            self.export_bar(ui);
+                            self.export_bar(ui, true);
                         });
                         ui.add_space(8.0);
                         self.tab_strip(ui);
@@ -1669,20 +1903,22 @@ impl eframe::App for QrApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::new().fill(p.canvas).inner_margin(egui::Margin { left: 8, right: 20, top: 12, bottom: 16 }))
                 .show(ctx, |ui| {
+                    self.preview_toolbar(ui);
                     let avail = ui.available_size();
-                    let bottom = 128.0;
+                    let bottom = 136.0;
                     self.preview(ui, Vec2::new(avail.x, (avail.y - bottom).max(220.0)));
                     card_frame().show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         self.info_bar(ui);
-                        ui.add_space(2.0);
-                        self.export_bar(ui);
+                        ui.add_space(4.0);
+                        self.export_bar(ui, false);
                     });
                 });
         }
 
         self.track_history(ctx);
         self.file_list_window(ctx);
+        self.about_window(ctx);
         self.show_toast(ctx);
         self.handle_screenshot(ctx);
     }
@@ -1793,14 +2029,50 @@ fn pill(ui: &mut egui::Ui, text: &str, selected: bool) -> egui::Response {
     )
 }
 
-/// Marco de una tarjeta.
+/// Marco de una tarjeta (con una sombra muy suave en el tema claro).
 fn card_frame() -> egui::Frame {
     let p = pal();
+    let shadow = if DARK.load(Ordering::Relaxed) {
+        egui::Shadow::NONE
+    } else {
+        egui::Shadow { offset: [0, 1], blur: 6, spread: 0, color: Color32::from_black_alpha(10) }
+    };
     egui::Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0f32, p.card_stroke))
         .corner_radius(14)
+        .shadow(shadow)
         .inner_margin(egui::Margin::same(14))
+}
+
+/// Un dato con su explicación debajo, sin fondo (para la barra inferior).
+fn stat(ui: &mut egui::Ui, value: &str, label: &str) {
+    let w = text_width(ui, value, 14.5).max(text_width(ui, label, 12.0)) + 2.0;
+    fixed_box(ui, Vec2::new(w, 40.0), |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.add_space(2.0);
+        ui.add(egui::Label::new(RichText::new(value).family(bold()).size(14.5)).extend());
+        ui.add(egui::Label::new(RichText::new(label).small().color(pal().hint)).extend());
+    });
+}
+
+/// Línea vertical fina que separa datos.
+fn vsep(ui: &mut egui::Ui) {
+    let (r, _) = ui.allocate_exact_size(Vec2::new(1.0, 34.0), egui::Sense::hover());
+    ui.painter().rect_filled(r, 0.0, pal().card_stroke);
+}
+
+/// Pastilla pequeña elegible (para la barra de la vista previa).
+fn small_pill(ui: &mut egui::Ui, text: &str, selected: bool) -> egui::Response {
+    let p = pal();
+    let txt = RichText::new(text).size(12.5).color(if selected { Color32::WHITE } else { p.hint });
+    ui.add(
+        egui::Button::new(txt)
+            .fill(if selected { ACCENT } else { p.field })
+            .stroke(Stroke::NONE)
+            .corner_radius(14)
+            .min_size(Vec2::new(0.0, 26.0)),
+    )
 }
 
 /// Tarjeta con título que agrupa unas opciones.
@@ -1817,7 +2089,7 @@ fn card(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
 /// Una fila con un nombre y un control (normalmente un deslizador).
 fn slider_row(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> egui::Response) {
     ui.horizontal(|ui| {
-        ui.add_sized([120.0, 20.0], egui::Label::new(RichText::new(label).color(pal().hint)).truncate());
+        ui.add_sized([138.0, 20.0], egui::Label::new(RichText::new(label).color(pal().hint)).truncate());
         add(ui);
     });
 }
@@ -1828,22 +2100,6 @@ fn hint(ui: &mut egui::Ui, text: &str) {
 
 fn warn(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(format!("⚠ {text}")).color(pal().warn));
-}
-
-/// Ficha pequeña con un dato y una explicación debajo.
-fn chip(ui: &mut egui::Ui, title: &str, sub: &str) {
-    // Se mide antes para reservar su sitio: así, en pantallas estrechas, la ficha entera
-    // pasa a la línea siguiente en vez de partirse letra a letra.
-    let w = text_width(ui, title, 14.5).max(text_width(ui, sub, 12.0)) + 28.0;
-    fixed_box(ui, Vec2::new(w, 46.0), |ui| {
-        egui::Frame::new().fill(pal().field).corner_radius(10).inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 1.0;
-                ui.add(egui::Label::new(RichText::new(title).strong()).extend());
-                ui.add(egui::Label::new(RichText::new(sub).small().color(pal().hint)).extend());
-            });
-        });
-    });
 }
 
 /// Ancho que ocupa un texto de una línea.
@@ -1876,7 +2132,9 @@ fn tile_picker<T: Copy + PartialEq>(ui: &mut egui::Ui, items: &[(T, egui::Textur
             }
             let icon = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.top() + 32.0), Vec2::splat(40.0));
             painter.image(*tex, icon, full_uv(), if sel { ACCENT } else { p.icon });
-            let galley = painter.layout(label.to_string(), FontId::proportional(11.5), if sel { ACCENT } else { p.hint }, tile.x - 6.0);
+            let fit = (tile.x - 8.0) / text_width(ui, label, 11.5).max(1.0);
+            let size = (11.5 * fit.min(1.0)).max(9.0);
+            let galley = painter.layout_no_wrap(label.to_string(), FontId::proportional(size), if sel { ACCENT } else { p.hint });
             let pos = egui::pos2(rect.center().x - galley.size().x * 0.5, rect.bottom() - 8.0 - galley.size().y);
             painter.galley(pos, galley, p.hint);
             if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {

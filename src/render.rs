@@ -813,145 +813,235 @@ impl Sampler {
     }
 }
 
-/// Lienzo de píxeles en coma flotante donde se van mezclando las capas.
-pub struct Canvas {
-    pub w: usize,
-    pub h: usize,
-    /// Color premultiplicado.
+/// Lienzo de una franja horizontal de la imagen (filas `y0 .. y0 + h`), en coma flotante y
+/// con el color premultiplicado, donde se van mezclando las capas.
+struct Canvas {
+    w: usize,
+    h: usize,
+    y0: usize,
     px: Vec<[f32; 4]>,
 }
 
 impl Canvas {
+    #[inline]
     fn blend(&mut self, i: usize, c: [f32; 4], cov: f32) {
         let a = c[3] * cov;
         if a <= 0.0 {
             return;
         }
         let d = &mut self.px[i];
-        d[0] = c[0] * a + d[0] * (1.0 - a);
-        d[1] = c[1] * a + d[1] * (1.0 - a);
-        d[2] = c[2] * a + d[2] * (1.0 - a);
-        d[3] = a + d[3] * (1.0 - a);
+        let k = 1.0 - a;
+        d[0] = c[0] * a + d[0] * k;
+        d[1] = c[1] * a + d[1] * k;
+        d[2] = c[2] * a + d[2] * k;
+        d[3] = a + d[3] * k;
     }
 
-    fn into_image(self) -> RgbaImage {
-        let mut img = RgbaImage::new(self.w as u32, self.h as u32);
-        for (i, p) in self.px.iter().enumerate() {
-            let a = p[3].clamp(0.0, 1.0);
-            let px = if a > 0.0 {
-                [
-                    (p[0] / a * 255.0 + 0.5).clamp(0.0, 255.0) as u8,
-                    (p[1] / a * 255.0 + 0.5).clamp(0.0, 255.0) as u8,
-                    (p[2] / a * 255.0 + 0.5).clamp(0.0, 255.0) as u8,
-                    (a * 255.0 + 0.5) as u8,
-                ]
-            } else {
-                [0, 0, 0, 0]
-            };
-            img.as_mut()[i * 4..i * 4 + 4].copy_from_slice(&px);
+    /// Mezcla un color en la posición global (x, y) si cae dentro de la franja.
+    #[inline]
+    fn blend_at(&mut self, x: i64, y: i64, c: [f32; 4], cov: f32) {
+        if x < 0 || (x as usize) >= self.w || y < self.y0 as i64 || y >= (self.y0 + self.h) as i64 {
+            return;
         }
-        img
+        let i = (y as usize - self.y0) * self.w + x as usize;
+        self.blend(i, c, cov);
+    }
+
+    /// Pasa la franja a bytes RGBA (sin premultiplicar).
+    fn write_rgba(&self, out: &mut [u8]) {
+        for (p, o) in self.px.iter().zip(out.chunks_exact_mut(4)) {
+            let a = p[3].clamp(0.0, 1.0);
+            if a > 0.0 {
+                let inv = 255.0 / a;
+                o[0] = (p[0] * inv + 0.5).clamp(0.0, 255.0) as u8;
+                o[1] = (p[1] * inv + 0.5).clamp(0.0, 255.0) as u8;
+                o[2] = (p[2] * inv + 0.5).clamp(0.0, 255.0) as u8;
+                o[3] = (a * 255.0 + 0.5) as u8;
+            } else {
+                o.copy_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+    }
+}
+
+/// Lo que comparten todas las franjas: la escena, la escala, los recuadros de cada figura en
+/// píxeles (calculados una sola vez) y el logo ya reducido a su tamaño final.
+struct RasterJob<'a> {
+    scene: &'a Scene,
+    font: &'a ab_glyph::FontArc,
+    scale: f32,
+    w: usize,
+    /// Por capa: el recuadro (x0, y0, x1, y1) en píxeles de cada figura.
+    boxes: Vec<Vec<(usize, usize, usize, usize)>>,
+    /// Logo a su tamaño final y su esquina en píxeles.
+    logo: Option<(RgbaImage, i64, i64)>,
+}
+
+impl RasterJob<'_> {
+    /// Dibuja las filas `y0 .. y1` y deja los bytes RGBA en `out`.
+    fn render_band(&self, y0: usize, y1: usize, out: &mut [u8]) {
+        let (w, scale) = (self.w, self.scale);
+        let bh = y1 - y0;
+        let mut cv = Canvas { w, h: bh, y0, px: vec![[0.0; 4]; w * bh] };
+        let mut mask = vec![0.0f32; w * bh];
+
+        for (layer, boxes) in self.scene.layers.iter().zip(&self.boxes) {
+            // Recuadro de lo que esta capa ha tocado dentro de la franja.
+            let (mut bx0, mut by0, mut bx1, mut by1) = (w, y1, 0usize, y0);
+            for (p, &(x0, py0, x1, py1)) in layer.prims.iter().zip(boxes) {
+                let (ya, yb) = (py0.max(y0), py1.min(y1));
+                if ya >= yb || x0 >= x1 {
+                    continue;
+                }
+                bx0 = bx0.min(x0);
+                bx1 = bx1.max(x1);
+                by0 = by0.min(ya);
+                by1 = by1.max(yb);
+                for yy in ya..yb {
+                    let uy = (yy as f32 + 0.5) / scale;
+                    let row = (yy - y0) * w;
+                    for xx in x0..x1 {
+                        let ux = (xx as f32 + 0.5) / scale;
+                        // Cobertura del píxel según su distancia (en píxeles) al borde.
+                        let c = (0.5 - p.sd(ux, uy) * scale).clamp(0.0, 1.0);
+                        if c > 0.0 {
+                            let m = &mut mask[row + xx];
+                            *m = (*m + c).min(1.0);
+                        }
+                    }
+                }
+            }
+            if bx0 >= bx1 || by0 >= by1 {
+                continue;
+            }
+            let sampler = Sampler::new(&layer.fill, layer.gbox);
+            let solid = matches!(layer.fill.mode, FillMode::Solid | FillMode::Transparent).then(|| sampler.at(0.0, 0.0));
+            for yy in by0..by1 {
+                let uy = (yy as f32 + 0.5) / scale;
+                let row = (yy - y0) * w;
+                for xx in bx0..bx1 {
+                    let i = row + xx;
+                    let m = mask[i];
+                    if m > 0.0 {
+                        let c = match solid {
+                            Some(c) => c,
+                            None => sampler.at((xx as f32 + 0.5) / scale, uy),
+                        };
+                        cv.blend(i, c, m);
+                        mask[i] = 0.0;
+                    }
+                }
+            }
+        }
+
+        // Logo (solo sus filas dentro de la franja).
+        if let Some((img, lx, ly)) = &self.logo {
+            let (iw, ih) = (img.width() as i64, img.height() as i64);
+            let ya = (y0 as i64).max(*ly);
+            let yb = (y1 as i64).min(ly + ih);
+            for y in ya..yb {
+                for x in 0..iw {
+                    let p = img.get_pixel(x as u32, (y - ly) as u32);
+                    if p[3] == 0 {
+                        continue;
+                    }
+                    let c = [p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0, p[3] as f32 / 255.0];
+                    cv.blend_at(lx + x, y, c, 1.0);
+                }
+            }
+        }
+
+        // Texto del marco.
+        if let Some(t) = &self.scene.text {
+            draw_text(&mut cv, self.font, t, scale);
+        }
+
+        cv.write_rgba(out);
     }
 }
 
 /// Pinta una escena en una imagen de `px_width` píxeles de ancho (el alto sale de la
 /// proporción de la escena).
-#[allow(non_snake_case)]
-pub fn rasterize(
-    scene: &Scene,
-    logo: Option<&RgbaImage>,
-    font: &ab_glyph::FontArc,
-    px_width: u32,
-) -> RgbaImage {
+///
+/// La imagen se divide en franjas horizontales que se dibujan a la vez en todos los núcleos
+/// del procesador; cada franja usa poca memoria, así que una imagen de 4096 px ya no
+/// necesita cientos de megas.
+pub fn rasterize(scene: &Scene, logo: Option<&RgbaImage>, font: &ab_glyph::FontArc, px_width: u32) -> RgbaImage {
     let scale = px_width as f32 / scene.w;
     let w = px_width.max(1) as usize;
     let h = ((scene.h * scale).round() as usize).max(1);
-    let mut cv = Canvas { w, h, px: vec![[0.0; 4]; w * h] };
-    let mut mask = vec![0.0f32; w * h];
 
-    for layer in &scene.layers {
-        if layer.prims.is_empty() {
-            continue;
-        }
-        let (mut bx0, mut by0, mut bx1, mut by1) = (w, h, 0usize, 0usize);
-        for p in &layer.prims {
-            let b = p.bounds();
-            let x0 = ((b.0 * scale).floor() as i64 - 1).clamp(0, w as i64) as usize;
-            let y0 = ((b.1 * scale).floor() as i64 - 1).clamp(0, h as i64) as usize;
-            let x1 = ((b.2 * scale).ceil() as i64 + 1).clamp(0, w as i64) as usize;
-            let y1 = ((b.3 * scale).ceil() as i64 + 1).clamp(0, h as i64) as usize;
-            if x0 >= x1 || y0 >= y1 {
-                continue;
+    // Recuadros de las figuras en píxeles (con un píxel de margen para el borde suave).
+    let boxes = scene
+        .layers
+        .iter()
+        .map(|layer| {
+            layer
+                .prims
+                .iter()
+                .map(|p| {
+                    let b = p.bounds();
+                    let x0 = ((b.0 * scale).floor() as i64 - 1).clamp(0, w as i64) as usize;
+                    let y0 = ((b.1 * scale).floor() as i64 - 1).clamp(0, h as i64) as usize;
+                    let x1 = ((b.2 * scale).ceil() as i64 + 1).clamp(0, w as i64) as usize;
+                    let y1 = ((b.3 * scale).ceil() as i64 + 1).clamp(0, h as i64) as usize;
+                    (x0, y0, x1, y1)
+                })
+                .collect()
+        })
+        .collect();
+
+    // El logo se reduce una sola vez para todas las franjas.
+    let logo = match (logo, scene.logo_box) {
+        (Some(img), Some((lx, ly, side))) => {
+            let box_px = (side * scale).max(1.0);
+            let (iw, ih) = (img.width() as f32, img.height() as f32);
+            let k = box_px / iw.max(ih);
+            let tw = ((iw * k).round() as u32).max(1);
+            let th = ((ih * k).round() as u32).max(1);
+            let mut resized = image::imageops::resize(img, tw, th, image::imageops::FilterType::Triangle);
+            if scene.logo_round {
+                resized = round_mask(&resized);
             }
-            bx0 = bx0.min(x0);
-            by0 = by0.min(y0);
-            bx1 = bx1.max(x1);
-            by1 = by1.max(y1);
-            for yy in y0..y1 {
-                let uy = (yy as f32 + 0.5) / scale;
-                let row = yy * w;
-                for xx in x0..x1 {
-                    let ux = (xx as f32 + 0.5) / scale;
-                    let d = p.sd(ux, uy) * scale;
-                    let c = (0.5 - d).clamp(0.0, 1.0);
-                    if c > 0.0 {
-                        let m = &mut mask[row + xx];
-                        *m = (*m + c).min(1.0);
+            let x0 = (lx * scale + (box_px - tw as f32) * 0.5).round() as i64;
+            let y0 = (ly * scale + (box_px - th as f32) * 0.5).round() as i64;
+            Some((resized, x0, y0))
+        }
+        _ => None,
+    };
+
+    let job = RasterJob { scene, font, scale, w, boxes, logo };
+    let mut out = vec![0u8; w * h * 4];
+
+    // Imágenes pequeñas (iconos, miniaturas): de una vez, sin hilos.
+    let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(16);
+    if w * h < 160_000 || threads <= 1 {
+        job.render_band(0, h, &mut out);
+    } else {
+        // Varias franjas por hilo para repartir bien el trabajo (las zonas con texto o
+        // muchas figuras tardan más).
+        let band_h = h.div_ceil(threads * 4).max(16);
+        let mut per_thread: Vec<Vec<(usize, &mut [u8])>> = (0..threads).map(|_| Vec::new()).collect();
+        for (i, chunk) in out.chunks_mut(band_h * w * 4).enumerate() {
+            per_thread[i % threads].push((i * band_h, chunk));
+        }
+        let job = &job;
+        std::thread::scope(|s| {
+            for bands in per_thread {
+                s.spawn(move || {
+                    for (y0, chunk) in bands {
+                        let y1 = y0 + chunk.len() / (w * 4);
+                        job.render_band(y0, y1, chunk);
                     }
-                }
+                });
             }
-        }
-        if bx0 >= bx1 || by0 >= by1 {
-            continue;
-        }
-        let sampler = Sampler::new(&layer.fill, layer.gbox);
-        for yy in by0..by1 {
-            let uy = (yy as f32 + 0.5) / scale;
-            for xx in bx0..bx1 {
-                let i = yy * w + xx;
-                let m = mask[i];
-                if m > 0.0 {
-                    let c = sampler.at((xx as f32 + 0.5) / scale, uy);
-                    cv.blend(i, c, m);
-                    mask[i] = 0.0;
-                }
-            }
-        }
+        });
     }
-
-    // Logo
-    if let (Some(img), Some((lx, ly, side))) = (logo, scene.logo_box) {
-        let box_px = (side * scale).max(1.0);
-        let (iw, ih) = (img.width() as f32, img.height() as f32);
-        let k = box_px / iw.max(ih);
-        let tw = ((iw * k).round() as u32).max(1);
-        let th = ((ih * k).round() as u32).max(1);
-        let mut resized = image::imageops::resize(img, tw, th, image::imageops::FilterType::Triangle);
-        if scene.logo_round {
-            resized = round_mask(&resized);
-        }
-        let x0 = (lx * scale + (box_px - tw as f32) * 0.5).round() as i64;
-        let y0 = (ly * scale + (box_px - th as f32) * 0.5).round() as i64;
-        for (x, y, p) in resized.enumerate_pixels() {
-            let (X, Y) = (x0 + x as i64, y0 + y as i64);
-            if X < 0 || Y < 0 || X >= w as i64 || Y >= h as i64 {
-                continue;
-            }
-            let c = [p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0, p[3] as f32 / 255.0];
-            cv.blend(Y as usize * w + X as usize, c, 1.0);
-        }
-    }
-
-    // Texto del marco
-    if let Some(t) = &scene.text {
-        draw_text(&mut cv, font, t, scale);
-    }
-
-    cv.into_image()
+    RgbaImage::from_raw(w as u32, h as u32, out).expect("tamaño de imagen")
 }
 
-#[allow(non_snake_case)]
-/// Escribe el texto del marco centrado (se encoge si no cabe).
+/// Escribe el texto del marco centrado (se encoge si no cabe). Solo pinta las filas que
+/// caen dentro de la franja del lienzo.
 fn draw_text(cv: &mut Canvas, font: &ab_glyph::FontArc, t: &TextSpec, scale: f32) {
     use ab_glyph::{Font, Glyph, PxScale, ScaleFont};
     let measure = |px: f32| -> f32 {
@@ -974,12 +1064,14 @@ fn draw_text(cv: &mut Canvas, font: &ab_glyph::FontArc, t: &TextSpec, scale: f32
     if tw > maxw && tw > 0.0 {
         px *= maxw / tw;
     }
+    // Si el texto no toca esta franja, no hay nada que hacer.
+    let (top, bottom) = (t.cy * scale - px, t.cy * scale + px);
+    if bottom < cv.y0 as f32 || top > (cv.y0 + cv.h) as f32 {
+        return;
+    }
     let tw = measure(px);
     let sf = font.as_scaled(PxScale::from(px));
-    let cap = font
-        .outline_glyph(sf.scaled_glyph('H'))
-        .map(|g| g.px_bounds().height())
-        .unwrap_or(px * 0.7);
+    let cap = font.outline_glyph(sf.scaled_glyph('H')).map(|g| g.px_bounds().height()).unwrap_or(px * 0.7);
     let baseline = t.cy * scale + cap * 0.5;
     let mut x = t.cx * scale - tw * 0.5;
     let col = [t.color[0] as f32 / 255.0, t.color[1] as f32 / 255.0, t.color[2] as f32 / 255.0, t.color[3] as f32 / 255.0];
@@ -993,11 +1085,7 @@ fn draw_text(cv: &mut Canvas, font: &ab_glyph::FontArc, t: &TextSpec, scale: f32
         if let Some(og) = font.outline_glyph(g) {
             let b = og.px_bounds();
             og.draw(|gx, gy, cov| {
-                let X = b.min.x as i64 + gx as i64;
-                let Y = b.min.y as i64 + gy as i64;
-                if X >= 0 && Y >= 0 && (X as usize) < cv.w && (Y as usize) < cv.h {
-                    cv.blend(Y as usize * cv.w + X as usize, col, cov.min(1.0));
-                }
+                cv.blend_at(b.min.x as i64 + gx as i64, b.min.y as i64 + gy as i64, col, cov.min(1.0));
             });
         }
         x += sf.h_advance(id);
@@ -1555,5 +1643,35 @@ mod tests {
             let svg = to_svg(&scene, Some(&logo), 512);
             assert!(svg.starts_with("<svg") && svg.trim_end().ends_with("</svg>"));
         }
+    }
+
+    /// Mide cuánto tarda dibujar (se ejecuta a mano: `cargo test --release bench -- --ignored --nocapture`).
+    #[test]
+    #[ignore]
+    fn bench_render() {
+        let font = ab_glyph::FontArc::try_from_slice(epaint_default_fonts::UBUNTU_LIGHT).unwrap();
+        let text = "https://www.ejemplo.com/una/direccion/bastante/larga?con=parametros&y=mas&datos=para&que=salga&un=codigo&grande=1234567890";
+        let rules = Rules { ecc: Ecc::H, ..Rules::default() };
+        let q = crate::qr::encode(text, &rules).unwrap();
+        println!("versión {} ({}×{})", q.version, q.size, q.size);
+        for (name, style) in [("clásico", Style::default()), ("océano", (PRESETS[1].style)()), ("fiesta", (PRESETS[14].style)())] {
+            let scene = build_scene(&q, &style, &rules, false);
+            for px in [720u32, 2048, 4096] {
+                let t = std::time::Instant::now();
+                let img = rasterize(&scene, None, &font, px);
+                println!("{name:8} {px:5} px: {:6.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+                if px == 720 {
+                    let t = std::time::Instant::now();
+                    let _ = verify(&img, &scene, text);
+                    println!("{name:8} verificar: {:6.1} ms", t.elapsed().as_secs_f64() * 1000.0);
+                }
+            }
+        }
+        let t = std::time::Instant::now();
+        for p in PRESETS {
+            let scene = build_scene(&q, &(p.style)(), &rules, false);
+            let _ = rasterize(&scene, None, &font, 240);
+        }
+        println!("31 miniaturas: {:6.1} ms", t.elapsed().as_secs_f64() * 1000.0);
     }
 }

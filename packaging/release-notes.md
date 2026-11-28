@@ -1,3 +1,24 @@
+## Novedades de la versión 2.2 · What's new in 2.2
+
+- **Interfaz renovada**: menú lateral animado, cabeceras con icono, barras de
+  desplazamiento finas, tarjetas con sombra suave, avisos con animación y una barra
+  inferior más limpia con los datos del código.
+- **Vista previa nítida** a la resolución de la pantalla, con fondo claro, oscuro o a
+  cuadros.
+- **Atajos de teclado** (Ctrl+S, Ctrl+Mayús+C, Ctrl+O, Ctrl+Mayús+S, F1) y ventana
+  «Acerca de».
+- **Mucho más rápido**: el dibujo usa todos los núcleos del procesador (de 5 a 8 veces más
+  rápido) y gasta mucha menos memoria al exportar en tamaños grandes.
+
+---
+
+- **Refreshed interface**: animated side menu, section headers with icons, thin scrollbars,
+  softly shadowed cards, animated notifications and a cleaner bottom bar.
+- **Sharp preview** at screen resolution, on a light, dark or checkered background.
+- **Keyboard shortcuts** (Ctrl+S, Ctrl+Shift+C, Ctrl+O, Ctrl+Shift+S, F1) and an About window.
+- **Much faster**: drawing uses every CPU core (5–8× faster) and far less memory for large
+  exports.
+
 ## Novedades de la versión 2.1 · What's new in 2.1
 
 - **Nuevos tipos de marco**: burbuja de diálogo, visor de cámara y foto polaroid.

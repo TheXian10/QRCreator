@@ -4,7 +4,7 @@
 ; Las rutas son relativas a esta carpeta.
 
 #ifndef AppVersion
-  #define AppVersion "2.1.0"
+  #define AppVersion "2.2.0"
 #endif
 
 [Setup]

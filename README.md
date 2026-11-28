@@ -26,7 +26,12 @@ formas de decorarlos. Escrito en Rust con [egui](https://github.com/emilk/egui).
   música, corazón y estrella), por si no tienes un logo.
 - **31 diseños listos** en una galería con miniaturas y categorías, y el botón
   **«Sorpréndeme»**, que crea un diseño al azar que se puede leer.
-- **Deshacer y rehacer** (Ctrl+Z / Ctrl+Y).
+- **Deshacer y rehacer** (Ctrl+Z / Ctrl+Y) y más atajos: Ctrl+S guarda, Ctrl+Mayús+C copia,
+  Ctrl+O abre un diseño y F1 muestra la ayuda.
+- **Vista previa nítida** a la resolución de tu pantalla, sobre fondo claro, oscuro o a
+  cuadros para ver las zonas transparentes.
+- **Rápido**: el dibujo se reparte entre todos los núcleos del procesador (una imagen de
+  4096 px tarda una décima de segundo y usa poca memoria).
 - **Comprueba que se pueda leer** mientras lo diseñas y avisa de contraste bajo o de un
   logo demasiado grande.
 - **Exporta** a PNG (hasta 4096 px), SVG (vectorial, para imprenta) y JPG, o copia la imagen.
@@ -156,7 +161,11 @@ of ways to decorate them. Written in Rust with [egui](https://github.com/emilk/e
   star) for when you don't have a logo.
 - **31 ready-made designs** in a gallery with categories, plus a **"Surprise me"** button
   that creates a random design that still scans.
-- **Undo and redo** (Ctrl+Z / Ctrl+Y).
+- **Undo and redo** (Ctrl+Z / Ctrl+Y) and more shortcuts: Ctrl+S saves, Ctrl+Shift+C copies,
+  Ctrl+O opens a design and F1 shows help.
+- **Sharp preview** at your screen's resolution, on a light, dark or checkered background.
+- **Fast**: drawing is spread across every CPU core (a 4096 px image takes about a tenth
+  of a second and little memory).
 - **Checks that it scans** while you design, and warns about low contrast or a logo
   that is too large.
 - **Export** to PNG (up to 4096 px), SVG (vector, for print) and JPG, or copy the image.
