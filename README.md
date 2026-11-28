@@ -5,11 +5,8 @@
 Crea códigos QR bonitos **sin internet**, con todas las reglas de la norma QR y muchas
 formas de decorarlos. Escrito en Rust con [egui](https://github.com/emilk/egui).
 
-![Creador de QR en modo claro](docs/captura-claro.png)
-
-| Modo oscuro y galería de diseños | Vista de teléfono |
-|---|---|
-| ![Modo oscuro](docs/captura-oscuro.png) | ![Vista de teléfono](docs/captura-movil.png) |
+Descarga el programa para tu sistema en
+**[Releases](https://github.com/TheXian10/QRCreator/releases/latest)**.
 
 ## Qué puede hacer
 

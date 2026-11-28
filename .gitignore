@@ -1,6 +1,28 @@
-# Compilación
+# ── Compilación
 /target
+/dist
 *.pdb
 
-# Capturas de prueba locales
-/shots
+# ── Material privado: nunca se sube al repositorio
+# Capturas de pantalla (de prueba o de documentación) y notas personales.
+/shots/
+/capturas/
+/privado/
+/notas/
+/docs/
+*.png.bak
+NOTAS*.md
+notas*.md
+*.privado.*
+*.private.*
+
+# Excepción: los iconos de la app sí hacen falta para compilar los instaladores.
+!/packaging/icons/
+
+# ── Archivos del sistema y de editores
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+.vscode/
+.idea/
